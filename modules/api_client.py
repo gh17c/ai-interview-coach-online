@@ -11,8 +11,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_api_key = os.getenv("DEEPSEEK_API_KEY", "")
+if not _api_key:
+    raise ValueError(
+        "DEEPSEEK_API_KEY 未设置。请在 .env 文件中配置你的 DeepSeek API Key。\n"
+        "获取 Key: https://platform.deepseek.com/api_keys"
+    )
+
 _client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+    api_key=_api_key,
     base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
 )
 
@@ -31,6 +38,30 @@ def _calculate_cost(usage: dict) -> float:
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
     return prompt_tokens * PRICE_INPUT + completion_tokens * PRICE_OUTPUT
+
+
+def _process_response(response) -> dict:
+    """统一处理 API 响应：提取内容、累计Token、计算费用"""
+    global _total_cost, _total_tokens
+    usage = response.usage
+    cost = _calculate_cost({
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+    })
+
+    _total_tokens["prompt"] += usage.prompt_tokens
+    _total_tokens["completion"] += usage.completion_tokens
+    _total_cost += cost
+
+    return {
+        "content": response.choices[0].message.content,
+        "usage": {
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+        },
+        "cost": cost,
+    }
 
 
 def chat(
@@ -53,7 +84,6 @@ def chat(
     返回:
         {"content": str, "usage": dict, "cost": float}
     """
-    global _total_cost, _total_tokens
     if model is None:
         model = DEFAULT_MODEL
 
@@ -67,25 +97,7 @@ def chat(
         kwargs["response_format"] = response_format
 
     response = _client.chat.completions.create(**kwargs)
-    usage = response.usage
-    cost = _calculate_cost({
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-    })
-
-    _total_tokens["prompt"] += usage.prompt_tokens
-    _total_tokens["completion"] += usage.completion_tokens
-    _total_cost += cost
-
-    return {
-        "content": response.choices[0].message.content,
-        "usage": {
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-            "total_tokens": usage.total_tokens,
-        },
-        "cost": cost,
-    }
+    return _process_response(response)
 
 
 def multi_turn_chat(
@@ -104,7 +116,6 @@ def multi_turn_chat(
     返回:
         {"content": str, "usage": dict, "cost": float}
     """
-    global _total_cost, _total_tokens
     if model is None:
         model = DEFAULT_MODEL
 
@@ -113,25 +124,7 @@ def multi_turn_chat(
         messages=messages,
         temperature=temperature,
     )
-    usage = response.usage
-    cost = _calculate_cost({
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-    })
-
-    _total_tokens["prompt"] += usage.prompt_tokens
-    _total_tokens["completion"] += usage.completion_tokens
-    _total_cost += cost
-
-    return {
-        "content": response.choices[0].message.content,
-        "usage": {
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-            "total_tokens": usage.total_tokens,
-        },
-        "cost": cost,
-    }
+    return _process_response(response)
 
 
 def get_total_cost() -> float:
