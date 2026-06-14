@@ -79,3 +79,26 @@ def delete_session(session_id: str) -> bool:
         os.remove(filepath)
         return True
     return False
+
+
+def log_pool_generation(profile: dict, scenario_key: str, pool_summary: dict) -> str:
+    """
+    记录一次题库生成事件。在用户点击"生成题库"时调用。
+    pool_summary: {"专业知识": 6, "科研深挖": 4, ...} 各维度题目数
+    """
+    _ensure_dir()
+    session_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
+    record = {
+        "session_id": session_id,
+        "created_at": datetime.now().isoformat(),
+        "scenario": scenario_key,
+        "mode": "pool_generation",  # 标记为题库生成事件
+        "profile": profile,
+        "pool_summary": pool_summary,
+        "messages": [],
+        "report": None,
+    }
+    filepath = os.path.join(SESSIONS_DIR, f"{session_id}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=2)
+    return session_id

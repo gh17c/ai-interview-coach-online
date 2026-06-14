@@ -6,15 +6,19 @@ DeepSeek 兼容 OpenAI SDK。
 """
 
 import os
+from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 
-load_dotenv()
+# 始终从项目根目录加载 .env，不受 CWD 影响
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_env_path)
 
 _api_key = os.getenv("DEEPSEEK_API_KEY", "")
 if not _api_key:
     raise ValueError(
         "DEEPSEEK_API_KEY 未设置。请在 .env 文件中配置你的 DeepSeek API Key。\n"
+        f"预期位置: {_env_path}\n"
         "获取 Key: https://platform.deepseek.com/api_keys"
     )
 
@@ -96,7 +100,10 @@ def chat(
     if response_format:
         kwargs["response_format"] = response_format
 
-    response = _client.chat.completions.create(**kwargs)
+    try:
+        response = _client.chat.completions.create(**kwargs, timeout=60.0)
+    except Exception as e:
+        raise RuntimeError(f"DeepSeek API 调用失败: {e}") from e
     return _process_response(response)
 
 
@@ -119,11 +126,13 @@ def multi_turn_chat(
     if model is None:
         model = DEFAULT_MODEL
 
-    response = _client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-    )
+    try:
+        response = _client.chat.completions.create(
+            model=model, messages=messages, temperature=temperature,
+            timeout=60.0,
+        )
+    except Exception as e:
+        raise RuntimeError(f"DeepSeek API 调用失败: {e}") from e
     return _process_response(response)
 
 

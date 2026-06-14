@@ -224,3 +224,67 @@ def replace_question(
         question_pool[dimension].append(new_question)
 
     return new_question
+
+
+def parse_resume(raw_text: str) -> dict:
+    """
+    AI 解析简历/自述文本，提取结构化表单字段。
+    用于"智能导入"功能：用户上传简历或粘贴内容 → AI自动填充表单。
+
+    返回: {
+        "target_major": str,
+        "undergrad_major": str,
+        "research_exp": str,
+        "competitions": str,
+        "english_level": str,
+        "self_intro_draft": str,
+        "target_school": str,
+        "target_advisor": str,
+    }
+    """
+    system_prompt = (
+        "你是一位专业的简历解析专家。请从以下文本中提取关键信息。"
+        "如果某项信息在文本中没有提及，字段值留空字符串。"
+        "只返回 JSON，不要有任何其他文字。"
+    )
+
+    user_message = f"""
+请从以下简历/自述文本中提取信息，返回 JSON：
+
+{{
+    "target_major": "报考/申请的专业（如'信息与通信工程'）",
+    "undergrad_major": "本科专业（如图'电子信息工程'）",
+    "research_exp": "科研经历摘要（如'国家级大创，方向是图像分割，使用U-Net模型'。提取1-3段最相关的科研/项目经历）",
+    "competitions": "竞赛/论文/获奖（如'数学建模省二等奖，IEEE论文1篇'）",
+    "english_level": "英语水平（如'CET-6 520'或'雅思7.0'）",
+    "self_intro_draft": "自我介绍的简要草稿（根据简历内容生成一段100字左右的自我介绍）",
+    "target_school": "目标院校（如果文本中提到）",
+    "target_advisor": "目标导师（如果文本中提到）"
+}}
+
+文本内容：
+{raw_text[:3000]}
+"""
+
+    result = chat(
+        system_prompt=system_prompt,
+        user_message=user_message,
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+
+    try:
+        data = json.loads(result["content"])
+    except json.JSONDecodeError:
+        data = {}
+
+    return {
+        "target_major": data.get("target_major", ""),
+        "undergrad_major": data.get("undergrad_major", ""),
+        "research_exp": data.get("research_exp", ""),
+        "competitions": data.get("competitions", ""),
+        "english_level": data.get("english_level", ""),
+        "self_intro_draft": data.get("self_intro_draft", ""),
+        "target_school": data.get("target_school", ""),
+        "target_advisor": data.get("target_advisor", ""),
+    }
