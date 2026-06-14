@@ -14,18 +14,43 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
 
-_api_key = os.getenv("DEEPSEEK_API_KEY", "")
-if not _api_key:
-    raise ValueError(
-        "DEEPSEEK_API_KEY 未设置。请在 .env 文件中配置你的 DeepSeek API Key。\n"
-        f"预期位置: {_env_path}\n"
-        "获取 Key: https://platform.deepseek.com/api_keys"
-    )
+_api_key = None
+_client = None
 
-_client = OpenAI(
-    api_key=_api_key,
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-)
+
+def _get_client():
+    """延迟初始化 OpenAI 客户端——首次调用 API 时才创建，避免导入时崩溃。"""
+    global _api_key, _client
+
+    if _client is not None:
+        return _client
+
+    # 1. 本地 .env 文件
+    key = os.getenv("DEEPSEEK_API_KEY", "")
+
+    # 2. Streamlit Cloud secrets
+    if not key:
+        try:
+            import streamlit as st
+            key = st.secrets.get("DEEPSEEK_API_KEY", "")
+        except Exception:
+            pass
+
+    if not key:
+        raise ValueError(
+            "DEEPSEEK_API_KEY 未设置。\n"
+            "本地运行：在 .env 文件中配置 API Key。（预期位置: {}）\n"
+            "Streamlit Cloud：在 App settings → Secrets 中添加：\n"
+            '  DEEPSEEK_API_KEY = "sk-..."\n'
+            "获取 Key: https://platform.deepseek.com/api_keys".format(_env_path)
+        )
+
+    _api_key = key
+    _client = OpenAI(
+        api_key=key,
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    )
+    return _client
 
 DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
@@ -101,7 +126,7 @@ def chat(
         kwargs["response_format"] = response_format
 
     try:
-        response = _client.chat.completions.create(**kwargs, timeout=60.0)
+        response = _get_client().chat.completions.create(**kwargs, timeout=60.0)
     except Exception as e:
         raise RuntimeError(f"DeepSeek API 调用失败: {e}") from e
     return _process_response(response)
@@ -127,7 +152,7 @@ def multi_turn_chat(
         model = DEFAULT_MODEL
 
     try:
-        response = _client.chat.completions.create(
+        response = _get_client().chat.completions.create(
             model=model, messages=messages, temperature=temperature,
             timeout=60.0,
         )
