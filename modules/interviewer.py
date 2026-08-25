@@ -112,7 +112,9 @@ def ask_next_question(
         "   - 判断标准：新题的核心话题词不能和上一题重复\n"
         "2. 严禁重复已讨论话题列表中的任何内容\n"
         "3. 结合考生具体背景，确保每个问题考察不同维度\n"
-        "4. 语言口语化，像真人面试官说话"
+        "4. 语言口语化，像真人面试官说话\n"
+        "5. 若当前环节涉及科研、项目或专业知识，必须优先引用简历事实；"
+        "简历未提到的内容不得当作考生经历。"
     )
 
     hint_line = (
@@ -124,7 +126,10 @@ def ask_next_question(
         f"考生背景：报考{profile.get('discipline', '未知')}专业，"
         f"目标{profile.get('target_school_tier', '')}院校。\n"
         f"优势：{', '.join(profile.get('strong_points', [])) or '暂无'}\n"
-        f"薄弱：{', '.join(profile.get('weak_points', [])) or '暂无'}"
+        f"薄弱：{', '.join(profile.get('weak_points', [])) or '暂无'}\n"
+        f"科研/项目事实：{profile.get('research_exp', '') or '未提供'}\n"
+        f"高分专业课：{profile.get('high_score_courses', '') or '未提供'}\n"
+        f"竞赛/论文：{profile.get('competitions', '') or '未提供'}"
     )
 
     user_message = (
