@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: transparent;
+        color: #262730;
+      }
+
+      .recorder {
+        border: 1px solid rgba(49, 51, 63, 0.2);
+        border-radius: 0.5rem;
+        padding: 0.7rem 0.8rem 0.65rem;
+        background: #fff;
+      }
+
+      .label {
+        font-size: 0.95rem;
+        font-weight: 600;
+        margin-bottom: 0.45rem;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+
+      .device-row {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        margin-top: 0.55rem;
+        flex-wrap: wrap;
+      }
+
+      .device-row label {
+        color: #5f6368;
+        font-size: 0.8rem;
+      }
+
+      select {
+        min-width: min(100%, 25rem);
+        max-width: 100%;
+        border: 1px solid rgba(49, 51, 63, 0.25);
+        border-radius: 0.35rem;
+        padding: 0.35rem 0.45rem;
+        background: #fff;
+        color: #262730;
+        font-size: 0.82rem;
+      }
+
+      .device-refresh {
+        background: #6b7280;
+        padding: 0.32rem 0.55rem;
+        font-size: 0.78rem;
+      }
+
+      button {
+        border: 0;
+        border-radius: 0.4rem;
+        padding: 0.42rem 0.8rem;
+        background: #ff4b4b;
+        color: #fff;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+
+      button:hover { background: #e23d3d; }
+      button:disabled { opacity: 0.58; cursor: not-allowed; }
+
+      .status {
+        color: #5f6368;
+        font-size: 0.82rem;
+      }
+
+      .status.error { color: #d93025; }
+      .status.ok { color: #188038; }
+
+      .meter {
+        height: 0.42rem;
+        margin-top: 0.65rem;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e8eaed;
+      }
+
+      .level {
+        display: block;
+        width: 0;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #34a853, #fbbc04, #ea4335);
+        transition: width 60ms linear;
+      }
+
+      .hint {
+        margin-top: 0.4rem;
+        color: #6b7280;
+        font-size: 0.76rem;
+        line-height: 1.35;
+      }
+
+      audio {
+        display: block;
+        width: 100%;
+        margin-top: 0.55rem;
+        height: 2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="recorder" id="recorder">
+      <div class="label" id="label">🎙️ 录音回答（可选）</div>
+      <div class="row">
+        <button id="recordButton" type="button">开始录音</button>
+        <span class="status" id="status">点击开始后允许浏览器使用麦克风</span>
+      </div>
+      <div class="device-row">
+        <label for="modeSelect">录音环境</label>
+        <select id="modeSelect" aria-label="选择录音环境">
+          <option value="auto">自动适配（推荐）</option>
+          <option value="speaker">电脑外放 / 开放麦克风</option>
+          <option value="headset">耳机麦克风</option>
+        </select>
+      </div>
+      <div class="device-row">
+        <label for="deviceSelect">输入设备</label>
+        <select id="deviceSelect" aria-label="选择麦克风" disabled>
+          <option value="">点击开始录音后加载设备</option>
+        </select>
+        <button id="refreshDevices" class="device-refresh" type="button">刷新设备</button>
+      </div>
+      <div class="meter" aria-label="麦克风输入音量"><span class="level" id="level"></span></div>
+      <div class="hint" id="hint">
+        录音开始时会自动停止面试官播报；可选择电脑外放或耳机，并指定具体输入设备。
+      </div>
+      <audio id="preview" controls hidden></audio>
+    </div>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const label = document.getElementById("label");
+        const recordButton = document.getElementById("recordButton");
+        const status = document.getElementById("status");
+        const hint = document.getElementById("hint");
+        const level = document.getElementById("level");
+        const preview = document.getElementById("preview");
+        const deviceSelect = document.getElementById("deviceSelect");
+        const refreshDevicesButton = document.getElementById("refreshDevices");
+        const modeSelect = document.getElementById("modeSelect");
+
+        let stream = null;
+        let mediaRecorder = null;
+        let chunks = [];
+        let startedAt = 0;
+        let elapsedTimer = null;
+        let meterFrame = null;
+        let audioContext = null;
+        let analyser = null;
+        // Keep peak/average activity over the whole clip. Looking only at the
+        // final analyser frame misclassifies a valid recording when the user
+        // pauses for a moment before pressing Stop.
+        let levelStats = {
+          rms: 0,
+          peak: 0,
+          maxRms: 0,
+          maxPeak: 0,
+          sumRms: 0,
+          sampleCount: 0,
+          activeSamples: 0,
+        };
+        let processingSettings = {};
+        let maxSeconds = 30;
+        let currentMime = "";
+        let selectedDeviceId = "";
+        let devicesLoaded = false;
+        let selectedMode = "auto";
+
+        function postMessage(type, payload) {
+          window.parent.postMessage(
+            Object.assign({ isStreamlitMessage: true, type }, payload || {}),
+            "*"
+          );
+        }
+
+        function setComponentValue(value) {
+          postMessage("streamlit:setComponentValue", {
+            value,
+            dataType: "json",
+          });
+        }
+
+        function setFrameHeight() {
+          postMessage("streamlit:setFrameHeight", {
+            height: document.body.scrollHeight,
+          });
+        }
+
+        function setStatus(message, kind) {
+          status.textContent = message;
+          status.className = "status" + (kind ? " " + kind : "");
+          setFrameHeight();
+        }
+
+        function deviceLabel(device, index) {
+          const raw = (device && device.label) || "";
+          return raw || ("麦克风 " + (index + 1));
+        }
+
+        async function refreshDevices() {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+            deviceSelect.innerHTML = "<option value=\"\">浏览器不支持设备选择</option>";
+            deviceSelect.disabled = true;
+            return;
+          }
+          try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const inputs = devices.filter((device) => device.kind === "audioinput");
+            const previous = selectedDeviceId || deviceSelect.value;
+            deviceSelect.innerHTML = "";
+            if (!inputs.length) {
+              deviceSelect.innerHTML = "<option value=\"\">未找到麦克风</option>";
+              deviceSelect.disabled = true;
+              setStatus("未发现麦克风，请连接设备后点击“刷新设备”。", "error");
+              return;
+            }
+            inputs.forEach((device, index) => {
+              const option = document.createElement("option");
+              option.value = device.deviceId || "";
+              option.textContent = deviceLabel(device, index);
+              deviceSelect.appendChild(option);
+            });
+            const match = inputs.find((device) => device.deviceId === previous);
+            deviceSelect.value = match ? previous : (inputs[0].deviceId || "");
+            selectedDeviceId = deviceSelect.value;
+            deviceSelect.disabled = false;
+            devicesLoaded = true;
+          } catch (error) {
+            deviceSelect.innerHTML = "<option value=\"\">无法读取输入设备</option>";
+            deviceSelect.disabled = true;
+          }
+          setFrameHeight();
+        }
+
+        function cancelSpeech() {
+          // Speech may have been created by this component, by components.html,
+          // or by the parent page. Cancel every same-origin window we can reach.
+          const windows = [window];
+          try { windows.push(window.parent); } catch (error) {}
+          try { windows.push(window.top); } catch (error) {}
+          windows.forEach((owner) => {
+            try {
+              if (owner && owner.speechSynthesis) owner.speechSynthesis.cancel();
+            } catch (error) {}
+          });
+          try {
+            const frames = window.parent.document.querySelectorAll("iframe");
+            frames.forEach((frame) => {
+              try {
+                if (frame.contentWindow && frame.contentWindow.speechSynthesis) {
+                  frame.contentWindow.speechSynthesis.cancel();
+                }
+              } catch (error) {}
+            });
+          } catch (error) {}
+        }
+
+        function supportedMimeType() {
+          if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "";
+          const candidates = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4",
+            "audio/ogg;codecs=opus",
+          ];
+          return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
+        }
+
+        function extensionForMime(mimeType) {
+          if (mimeType.indexOf("mp4") >= 0) return "m4a";
+          if (mimeType.indexOf("ogg") >= 0) return "ogg";
+          if (mimeType.indexOf("wav") >= 0) return "wav";
+          return "webm";
+        }
+
+        function encodeWav(audioBuffer) {
+          const channel = audioBuffer.getChannelData(0);
+          const output = new ArrayBuffer(44 + channel.length * 2);
+          const view = new DataView(output);
+          const writeString = (offset, value) => {
+            for (let index = 0; index < value.length; index += 1) {
+              view.setUint8(offset + index, value.charCodeAt(index));
+            }
+          };
+          writeString(0, "RIFF");
+          view.setUint32(4, 36 + channel.length * 2, true);
+          writeString(8, "WAVE");
+          writeString(12, "fmt ");
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true); // PCM
+          view.setUint16(22, 1, true); // mono
+          view.setUint32(24, audioBuffer.sampleRate, true);
+          view.setUint32(28, audioBuffer.sampleRate * 2, true);
+          view.setUint16(32, 2, true);
+          view.setUint16(34, 16, true);
+          writeString(36, "data");
+          view.setUint32(40, channel.length * 2, true);
+          for (let index = 0; index < channel.length; index += 1) {
+            const sample = Math.max(-1, Math.min(1, channel[index]));
+            view.setInt16(44 + index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+          }
+          return new Blob([output], { type: "audio/wav" });
+        }
+
+        async function convertToWav(blob) {
+          // OpenAI-compatible speech endpoints are most consistent with WAV.
+          // Decode and resample in the browser so no ffmpeg installation is
+          // required on the user's computer.
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContextClass || !blob.arrayBuffer) throw new Error("Audio decoding unavailable");
+          const decodeContext = new AudioContextClass();
+          try {
+            const decoded = await decodeContext.decodeAudioData(await blob.arrayBuffer());
+            let rendered = decoded;
+            if (decoded.sampleRate !== 16000 || decoded.numberOfChannels !== 1) {
+              const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+              if (!OfflineContext) throw new Error("Audio resampling unavailable");
+              const frameCount = Math.max(1, Math.ceil(decoded.duration * 16000));
+              const offline = new OfflineContext(1, frameCount, 16000);
+              const source = offline.createBufferSource();
+              source.buffer = decoded;
+              source.connect(offline.destination);
+              source.start(0);
+              rendered = await offline.startRendering();
+            }
+            return encodeWav(rendered);
+          } finally {
+            try { await decodeContext.close(); } catch (error) {}
+          }
+        }
+
+        function stopMeter() {
+          if (meterFrame !== null) cancelAnimationFrame(meterFrame);
+          meterFrame = null;
+          if (elapsedTimer !== null) clearInterval(elapsedTimer);
+          elapsedTimer = null;
+          if (audioContext) {
+            try { audioContext.close(); } catch (error) {}
+          }
+          audioContext = null;
+          analyser = null;
+          level.style.width = "0%";
+        }
+
+        function updateMeter() {
+          if (!analyser) return;
+          const buffer = new Uint8Array(analyser.fftSize);
+          analyser.getByteTimeDomainData(buffer);
+          let sum = 0;
+          let peak = 0;
+          for (let index = 0; index < buffer.length; index += 1) {
+            const sample = (buffer[index] - 128) / 128;
+            sum += sample * sample;
+            peak = Math.max(peak, Math.abs(sample));
+          }
+          const rms = Math.sqrt(sum / buffer.length);
+          levelStats.rms = rms;
+          levelStats.peak = peak;
+          levelStats.maxRms = Math.max(levelStats.maxRms, rms);
+          levelStats.maxPeak = Math.max(levelStats.maxPeak, peak);
+          levelStats.sumRms += rms;
+          levelStats.sampleCount += 1;
+          if (rms >= 0.008 || peak >= 0.03) levelStats.activeSamples += 1;
+          // Expand quiet speech enough to be visible without pretending it is loud.
+          const visibleLevel = Math.min(100, Math.max(0, rms * 420));
+          level.style.width = visibleLevel.toFixed(1) + "%";
+          meterFrame = requestAnimationFrame(updateMeter);
+        }
+
+        async function requestMicrophone() {
+          const deviceConstraint = selectedDeviceId
+            ? { deviceId: { exact: selectedDeviceId } }
+            : {};
+          const processing = selectedMode === "headset"
+            // Headset profile requests the equivalent of:
+            // echoCancellation: false, noiseSuppression: false, autoGainControl: false
+            ? { echoCancellation: { ideal: false }, noiseSuppression: { ideal: false }, autoGainControl: { ideal: false } }
+            : selectedMode === "speaker"
+              ? { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } }
+              : { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } };
+          const attempts = [
+            // Use the selected environment profile; ``ideal`` values remain
+            // negotiable so Windows headset and laptop drivers can accept them.
+            { audio: Object.assign({}, deviceConstraint, {
+              ...processing,
+              channelCount: { ideal: 1 },
+              sampleRate: { ideal: 16000 },
+            }) },
+            // Some Windows headset drivers reject the processing constraints.
+            { audio: Object.assign({}, deviceConstraint, {
+              channelCount: { ideal: 1 },
+            }) },
+            // Last resort: let the browser choose its compatible defaults.
+            { audio: selectedDeviceId ? deviceConstraint : true },
+            { audio: true },
+          ];
+          let lastError = null;
+          for (const constraints of attempts) {
+            try {
+              return await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (error) {
+              lastError = error;
+            }
+          }
+          throw lastError || new Error("Microphone unavailable");
+        }
+
+        function wireMeter() {
+          try {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 1024;
+            source.connect(analyser);
+            if (audioContext.state === "suspended" && audioContext.resume) {
+              audioContext.resume().catch(() => {});
+            }
+            updateMeter();
+          } catch (error) {
+            // Recording still works if AudioContext is unavailable.
+            analyser = null;
+          }
+        }
+
+        function inspectProcessingSettings() {
+          processingSettings = {};
+          try {
+            const track = stream && stream.getAudioTracks && stream.getAudioTracks()[0];
+            const settings = track && track.getSettings ? track.getSettings() : {};
+            ["echoCancellation", "noiseSuppression", "autoGainControl"].forEach((name) => {
+              if (typeof settings[name] === "boolean") processingSettings[name] = settings[name];
+            });
+            const stillProcessed = Object.keys(processingSettings).some(
+              (name) => processingSettings[name] === true
+            );
+            if (stillProcessed) {
+              hint.textContent = "当前设备保留了部分回声/降噪处理；开放扬声器时建议降低音量，戴耳机时可继续使用。";
+            }
+            const selectedOption = deviceSelect.options[deviceSelect.selectedIndex];
+            const selectedLabel = (track && track.label) || (selectedOption && selectedOption.textContent) || "默认麦克风";
+            if (track && track.readyState !== "live") {
+              setStatus("麦克风音轨未处于活动状态，请刷新设备后重试。", "error");
+            } else if (track && track.muted) {
+              setStatus("麦克风音轨被浏览器静音，请检查系统输入音量。", "error");
+            } else {
+              setStatus("已使用：" + selectedLabel + "；请说话并确认音量条变化。", "ok");
+            }
+          } catch (error) {}
+        }
+
+        function cleanupStream() {
+          if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+          }
+          stream = null;
+          stopMeter();
+        }
+
+        function finishRecording() {
+          if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+          recordButton.disabled = true;
+          setStatus("正在整理录音…");
+          mediaRecorder.stop();
+        }
+
+        function encodeRecording() {
+          const actualMime = (mediaRecorder && mediaRecorder.mimeType) || currentMime || "audio/webm";
+          const blob = new Blob(chunks, { type: actualMime });
+          const duration = Math.max(0, (Date.now() - startedAt) / 1000);
+          const track = stream && stream.getAudioTracks && stream.getAudioTracks()[0];
+          const trackSettings = track && track.getSettings ? track.getSettings() : {};
+          const trackInfo = {
+            deviceId: trackSettings.deviceId || selectedDeviceId || "",
+            label: (track && track.label) || "",
+            readyState: (track && track.readyState) || "",
+            muted: Boolean(track && track.muted),
+          };
+          cleanupStream();
+          recordButton.disabled = false;
+          recordButton.textContent = "重新录音";
+          if (!blob.size) {
+            setStatus("没有录到音频，请检查麦克风权限后重试。", "error");
+            return;
+          }
+          const finishUpload = (uploadBlob, uploadMime, uploadFilename) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+            const dataUrl = String(reader.result || "");
+            const separator = dataUrl.indexOf(",");
+            const base64 = separator >= 0 ? dataUrl.slice(separator + 1) : "";
+            if (!base64) {
+              setStatus("录音编码失败，请重试。", "error");
+              return;
+            }
+            const extension = extensionForMime(uploadMime);
+            preview.src = URL.createObjectURL(blob);
+            preview.hidden = false;
+            setStatus("录音完成，可在下方查看并等待语音识别。", "ok");
+            setComponentValue({
+              status: "recorded",
+              audio_base64: base64,
+              mime_type: uploadMime,
+              filename: uploadFilename || ("answer." + extension),
+              bytes: uploadBlob.size,
+              duration_seconds: Number(duration.toFixed(2)),
+              // 使用整段录音的最高活动窗口，避免用户停顿后点击停止
+              // 导致最后一个静音帧覆盖前面的有效语音。
+              rms: Number((levelStats.maxRms || levelStats.rms || 0).toFixed(6)),
+              peak: Number((levelStats.maxPeak || levelStats.peak || 0).toFixed(6)),
+              average_rms: Number((levelStats.sampleCount ? levelStats.sumRms / levelStats.sampleCount : 0).toFixed(6)),
+              active_ratio: Number((levelStats.sampleCount ? levelStats.activeSamples / levelStats.sampleCount : 0).toFixed(4)),
+              processing: processingSettings,
+              audio_mode: selectedMode,
+              device_id: trackInfo.deviceId,
+              track_label: trackInfo.label,
+              track_ready_state: trackInfo.readyState,
+              track_muted: trackInfo.muted,
+            });
+            };
+            reader.readAsDataURL(uploadBlob);
+          };
+          convertToWav(blob)
+            .then((wavBlob) => finishUpload(wavBlob, "audio/wav", "answer.wav"))
+            .catch(() => finishUpload(blob, actualMime, "answer." + extensionForMime(actualMime)));
+        }
+
+        async function startRecording() {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            setStatus("当前浏览器不支持麦克风录音，请使用最新版 Chrome 或 Edge。", "error");
+            return;
+          }
+          cancelSpeech();
+          recordButton.disabled = true;
+          setStatus("正在请求麦克风权限…");
+          try {
+            stream = await requestMicrophone();
+            inspectProcessingSettings();
+            currentMime = supportedMimeType();
+            if (!window.MediaRecorder) throw new Error("MediaRecorder unavailable");
+            mediaRecorder = currentMime
+              ? new MediaRecorder(stream, { mimeType: currentMime })
+              : new MediaRecorder(stream);
+            currentMime = mediaRecorder.mimeType || currentMime || "audio/webm";
+            chunks = [];
+            levelStats = {
+              rms: 0,
+              peak: 0,
+              maxRms: 0,
+              maxPeak: 0,
+              sumRms: 0,
+              sampleCount: 0,
+              activeSamples: 0,
+            };
+            startedAt = Date.now();
+            mediaRecorder.ondataavailable = (event) => {
+              if (event.data && event.data.size > 0) chunks.push(event.data);
+            };
+            mediaRecorder.onerror = () => {
+              setStatus("录音发生错误，请检查麦克风权限后重试。", "error");
+              cleanupStream();
+              recordButton.disabled = false;
+            };
+            mediaRecorder.onstop = encodeRecording;
+            mediaRecorder.start(250);
+            recordButton.textContent = "停止录音";
+            recordButton.disabled = false;
+            setStatus("正在录音…请正常说话，音量条应有明显变化。", "ok");
+            wireMeter();
+            elapsedTimer = setInterval(() => {
+              const seconds = (Date.now() - startedAt) / 1000;
+              if (seconds >= maxSeconds) finishRecording();
+              else setStatus("正在录音… " + Math.floor(seconds) + " 秒", "ok");
+            }, 500);
+          } catch (error) {
+            cleanupStream();
+            recordButton.disabled = false;
+            recordButton.textContent = "开始录音";
+            const name = error && error.name ? error.name : "";
+            if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+              setStatus("麦克风权限被拒绝，请在浏览器地址栏左侧点🔒→麦克风→允许，然后刷新页面。", "error");
+            } else if (name === "NotFoundError") {
+              setStatus("没有找到麦克风，请检查系统输入设备连接。", "error");
+            } else {
+              setStatus("无法打开麦克风（" + (name || "未知错误") + "），请使用 Chrome/Edge 重试。", "error");
+            }
+          }
+        }
+
+        recordButton.addEventListener("click", () => {
+          if (mediaRecorder && mediaRecorder.state === "recording") finishRecording();
+          else startRecording();
+        });
+
+        modeSelect.addEventListener("change", () => {
+          selectedMode = modeSelect.value || "auto";
+          hint.textContent = selectedMode === "speaker"
+            ? "开放麦克风模式：已启用回声消除、降噪和自动增益，适合电脑扬声器外放。"
+            : selectedMode === "headset"
+              ? "耳机模式：尽量保留原始麦克风信号，适合耳机或带麦克风耳塞。"
+              : "自动模式：优先使用兼容的浏览器处理，适配大多数电脑和耳机。";
+        });
+        deviceSelect.addEventListener("change", () => {
+          selectedDeviceId = deviceSelect.value || "";
+          setStatus("已选择输入设备，下一次录音时生效。", "ok");
+        });
+        refreshDevicesButton.addEventListener("click", refreshDevices);
+        if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+          navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+        }
+
+        window.addEventListener("beforeunload", cleanupStream);
+        window.addEventListener("message", (event) => {
+          const message = event.data || {};
+          if (message.type !== "streamlit:render") return;
+          const args = message.args || {};
+          label.textContent = args.label || "🎙️ 录音回答（可选）";
+          maxSeconds = Math.max(5, Number(args.max_seconds || 30));
+          if (args.audio_mode && ["auto", "speaker", "headset"].indexOf(args.audio_mode) >= 0) {
+            selectedMode = args.audio_mode;
+            modeSelect.value = selectedMode;
+          }
+          if (args.open_microphone === false) {
+            hint.textContent = "录音开始时会自动停止面试官播报。";
+          }
+          setFrameHeight();
+        });
+
+        postMessage("streamlit:componentReady", { apiVersion: 1 });
+        refreshDevices();
+        setFrameHeight();
+      })();
+    </script>
+  </body>
+</html>

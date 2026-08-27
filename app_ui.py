@@ -198,7 +198,6 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
     newly_transcribed = False
 
     if recording:
-        st.session_state.lit_voice_recorded = True
         audio_bytes = recording["audio_bytes"]
         audio_hash = hashlib.sha256(audio_bytes).hexdigest()
         if (
@@ -266,13 +265,20 @@ def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) 
             key=widget_key,
             max_seconds=max_seconds,
             open_microphone=True,
+            audio_mode="auto",
         )
     except VoiceCaptureError as exc:
         st.error(f"录音控件无法加载：{exc}")
         recording = None
 
     if recording:
+        st.session_state.lit_voice_recorded = True
         audio_bytes = recording["audio_bytes"]
+        st.caption(
+            f"输入设备：{recording.get('track_label') or '当前输入设备'} · "
+            f"录音时长：{recording.get('duration_seconds', 0.0):.1f} 秒 · "
+            f"峰值音量：{recording.get('peak', 0.0):.3f}"
+        )
         audio_hash = hashlib.sha256(audio_bytes).hexdigest()
         if (
             audio_hash != st.session_state.get("lit_voice_audio_hash", "")

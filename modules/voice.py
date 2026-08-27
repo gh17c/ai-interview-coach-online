@@ -68,6 +68,7 @@ def audio_recorder(
     key: str,
     max_seconds: int = 30,
     open_microphone: bool = True,
+    audio_mode: str = "auto",
 ) -> Optional[dict]:
     """Render the microphone recorder with explicit browser audio constraints.
 
@@ -90,8 +91,9 @@ def audio_recorder(
 
     value = _AUDIO_RECORDER_COMPONENT(
         label=label,
-        max_seconds=max(5, min(int(max_seconds), 120)),
+        max_seconds=max(5, min(int(max_seconds), 240)),
         open_microphone=bool(open_microphone),
+        audio_mode=str(audio_mode or "auto"),
         default=None,
         key=key,
     )
@@ -119,6 +121,13 @@ def audio_recorder(
         "duration_seconds": float(value.get("duration_seconds") or 0.0),
         "rms": float(value.get("rms") or 0.0),
         "peak": float(value.get("peak") or 0.0),
+        "average_rms": float(value.get("average_rms") or 0.0),
+        "active_ratio": float(value.get("active_ratio") or 0.0),
+        "track_label": str(value.get("track_label") or ""),
+        "track_ready_state": str(value.get("track_ready_state") or ""),
+        "track_muted": bool(value.get("track_muted", False)),
+        "device_id": str(value.get("device_id") or ""),
+        "audio_mode": str(value.get("audio_mode") or audio_mode or "auto"),
         "processing": value.get("processing") if isinstance(value.get("processing"), dict) else {},
     }
 
@@ -198,7 +207,13 @@ def _log_audio_event(
                         "audio_duration_seconds": round(stats.get("duration_seconds", 0.0), 3),
                         "audio_rms": round(stats.get("rms", 0.0), 6),
                         "audio_peak": round(stats.get("peak", 0.0), 6),
+                        "audio_average_rms": round(stats.get("average_rms", 0.0), 6),
+                        "audio_active_ratio": round(stats.get("active_ratio", 0.0), 4),
                         "audio_dbfs": round(stats.get("dbfs", -120.0), 2),
+                        "audio_mode": stats.get("audio_mode", ""),
+                        "track_label": stats.get("track_label", ""),
+                        "track_ready_state": stats.get("track_ready_state", ""),
+                        "track_muted": stats.get("track_muted", False),
                         "audio_processing": stats.get("processing", {}),
                         "text_length": text_length,
                     },
@@ -245,7 +260,22 @@ def transcribe_audio(
                 else {},
                 # Keep this conservative: a real voice signal is normally well
                 # above this level, while an open-mic silence recording is not.
-                is_silent=client_rms < 0.0015 and client_peak < 0.01,
+                active_ratio=max(0.0, min(1.0, float(client_stats.get("active_ratio", 0.0) or 0.0))),
+                average_rms=max(0.0, float(client_stats.get("average_rms", 0.0) or 0.0)),
+                audio_mode=str(client_stats.get("audio_mode", "") or ""),
+                track_label=str(client_stats.get("track_label", "") or ""),
+                track_ready_state=str(client_stats.get("track_ready_state", "") or ""),
+                track_muted=bool(client_stats.get("track_muted", False)),
+                # A few Windows/browser combinations expose a working stream
+                # but report zero analyser levels. Do not reject those clips
+                # solely on the meter; the payload-density check below catches
+                # the genuinely empty WebM files seen in practice.
+                is_silent=(
+                    client_rms < 0.0015
+                    and client_peak < 0.01
+                    and float(client_stats.get("active_ratio", 0.0) or 0.0) < 0.01
+                    and len(audio_bytes) < max(4096, int(client_duration * 700))
+                ),
             )
         except (TypeError, ValueError):
             pass
@@ -263,6 +293,18 @@ def transcribe_audio(
             "没有检测到清晰人声。录音开始时会自动停止播报；"
             "把麦克风靠近嘴部约 30–60 厘米，并确认系统输入音量不是静音；"
             "然后重新录一段 5–15 秒的回答。"
+        )
+    if stats.get("track_muted"):
+        _log_audio_event(
+            model=model,
+            audio_bytes=audio_bytes,
+            stats=stats,
+            started=started,
+            status="track_muted",
+        )
+        raise VoiceCaptureError(
+            "浏览器报告当前麦克风音轨已静音。请在录音控件中选择正确的输入设备，"
+            "并检查 Windows 输入音量或麦克风物理静音键后重新录音。"
         )
 
     suffix = Path(safe_filename).suffix.lower()

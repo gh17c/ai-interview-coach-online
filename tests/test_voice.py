@@ -116,6 +116,26 @@ class VoiceTests(unittest.TestCase):
                 )
         get_client.assert_not_called()
 
+    def test_transcription_allows_possible_driver_audio_when_meter_is_unavailable(self):
+        from modules.voice import transcribe_audio
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(
+                    create=lambda **kwargs: SimpleNamespace(text="driver audio")
+                )
+            )
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(
+                b"x" * 20000,
+                "answer.webm",
+                client_stats={"duration_seconds": 4.0, "rms": 0.0, "peak": 0.0},
+            )
+        self.assertEqual(result, "driver audio")
+
 
 if __name__ == "__main__":
     unittest.main()
