@@ -249,7 +249,9 @@ def transcribe_audio(
             )
         except (TypeError, ValueError):
             pass
-    if stats["parseable"] and stats["is_silent"]:
+    # WebM/MP4 无法用标准库解析，因此也要信任浏览器音量计的结果；
+    # 否则“有时长但全静音”的录音会被送到接口并返回空文本。
+    if stats.get("is_silent") and (stats.get("parseable") or stats.get("client_meter")):
         _log_audio_event(
             model=model,
             audio_bytes=audio_bytes,

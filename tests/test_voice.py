@@ -102,6 +102,20 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result, "grain boundaries influence metals")
         self.assertEqual(calls["language"], "en")
 
+    def test_transcription_rejects_silent_browser_recording_using_client_meter(self):
+        from modules.voice import VoiceCaptureError, transcribe_audio
+
+        with patch("modules.voice._get_client") as get_client, patch(
+            "modules.voice._log_audio_event"
+        ):
+            with self.assertRaises(VoiceCaptureError):
+                transcribe_audio(
+                    b"silent-webm",
+                    "answer.webm",
+                    client_stats={"duration_seconds": 19.4, "rms": 0.0, "peak": 0.0},
+                )
+        get_client.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

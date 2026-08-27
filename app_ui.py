@@ -55,6 +55,7 @@ DEFAULTS = {
     "lit_voice_error_hash": "",
     "lit_voice_transcript": "",
     "lit_voice_duration": 0.0,
+    "lit_voice_recorded": False,
     "lit_saved": False,
 }
 
@@ -197,6 +198,7 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
     newly_transcribed = False
 
     if recording:
+        st.session_state.lit_voice_recorded = True
         audio_bytes = recording["audio_bytes"]
         audio_hash = hashlib.sha256(audio_bytes).hexdigest()
         if (
@@ -290,7 +292,14 @@ def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) 
                 st.session_state.lit_voice_duration = recording.get("duration_seconds", 0.0)
                 edit_key = f"lit_{language}_transcript_edit"
                 st.session_state[edit_key] = transcript
-                st.success("语音识别完成。你可以在下方修正转写结果后提交。")
+                if transcript:
+                    st.success("语音识别完成。你可以在下方修正转写结果后提交。")
+                else:
+                    st.warning(
+                        "录音已上传，但没有识别出文字。请看录音控件的音量条："
+                        "如果没有明显变化，请在系统设置中切换输入设备并重新录音；"
+                        "也可以先在下方手动填写内容后提交。"
+                    )
             except VoiceCaptureError as exc:
                 st.session_state.lit_voice_error_hash = audio_hash
                 st.warning(str(exc))
@@ -299,12 +308,17 @@ def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) 
                 st.error(f"语音识别失败：{exc}")
 
     transcript = st.session_state.get("lit_voice_transcript", "")
-    if transcript:
+    if transcript or st.session_state.get("lit_voice_recorded", False):
         edit_key = f"lit_{language}_transcript_edit"
         transcript = st.text_area(
             "英文朗读转写（可修改）" if language == "en" else "中文口译转写（可修改）",
             key=edit_key,
             height=130 if language == "en" else 180,
+            placeholder=(
+                "未识别出英文时，可粘贴或手动输入朗读内容"
+                if language == "en"
+                else "未识别出中文时，可粘贴或手动输入口译内容"
+            ),
         )
     return transcript.strip(), float(st.session_state.get("lit_voice_duration", 0.0))
 
@@ -314,8 +328,7 @@ def _reset_literature_voice() -> None:
     st.session_state.lit_voice_error_hash = ""
     st.session_state.lit_voice_transcript = ""
     st.session_state.lit_voice_duration = 0.0
-    st.session_state.lit_en_transcript_edit = ""
-    st.session_state.lit_zh_transcript_edit = ""
+    st.session_state.lit_voice_recorded = False
 
 
 def _render_countdown(deadline: float) -> Optional[dict]:
