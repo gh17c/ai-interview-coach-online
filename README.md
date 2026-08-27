@@ -49,6 +49,8 @@ streamlit run app_ui.py
 Windows 分享与安装说明见 [SHARING.md](SHARING.md)。运行 `build_share_package.ps1` 可生成不含个人 API Key 的分享压缩包，
 好友解压后双击 `install_windows.bat`，按提示填写自己的硅基流动 API Key 即可安装。
 
+安装脚本会同时创建「AI Interview Coach」和「文献阅读翻译模拟」两个桌面快捷方式；后者双击后直接打开英文文献翻译环节。
+
 ### 语音模式
 
 进入「预推免综合面试」并开始全模拟后，点击「录音回答」，允许浏览器使用麦克风。

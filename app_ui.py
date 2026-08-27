@@ -67,6 +67,22 @@ for key, value in DEFAULTS.items():
 if isinstance(st.session_state.used_question_ids, list):
     st.session_state.used_question_ids = set(st.session_state.used_question_ids)
 
+# 专用桌面快捷方式通过 ?mode=literature_translation 直接进入文献翻译模式。
+# 仅在首次进入该模式时初始化，避免 Streamlit 后续重跑清空用户进度。
+try:
+    launch_mode = st.query_params.get("mode", "")
+except Exception:
+    launch_mode = ""
+if launch_mode == "literature_translation" and st.session_state.page == "profile":
+    st.session_state.mode = "literature_translation"
+    st.session_state.lit_material = get_random_material()
+    st.session_state.lit_stage = "reading"
+    st.session_state.lit_reading_result = None
+    st.session_state.lit_translation_result = None
+    st.session_state.lit_deadline = 0.0
+    st.session_state.lit_saved = False
+    st.session_state.page = "interview"
+
 
 with st.sidebar:
     st.title("🎓 AI 学术面试教练")
@@ -78,6 +94,10 @@ with st.sidebar:
             if key != "page":
                 st.session_state[key] = DEFAULTS[key]
         st.session_state.page = "profile"
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
         st.rerun()
 
     in_flow_pages = {"mode_select", "interview", "report"}
@@ -693,9 +713,15 @@ def render_literature_translation():
     st.session_state.lit_material = material
     stage = st.session_state.get("lit_stage", "reading")
     if st.button("← 返回模式选择", key="lit_back_mode"):
-        st.session_state.page = "mode_select"
+        # 通过桌面快捷方式进入时还没有画像/题库，返回应回到画像页；
+        # 从普通模式选择页进入时则保留原来的返回位置。
+        st.session_state.page = "mode_select" if st.session_state.get("question_pool") else "profile"
         st.session_state.mode = None
         _reset_literature_voice()
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
         st.rerun()
     st.title("📚 预推免英文文献翻译面试")
     st.caption(f"材料方向：{material['field']} · 难度：中等 · 原创训练材料")
