@@ -259,6 +259,10 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
 
 def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) -> tuple[str, float]:
     """为文献翻译环节录音并转写，和普通问答的语音状态完全隔离。"""
+    st.caption(
+        "请先在录音控件中选择环境：电脑扬声器外放选“电脑外放 / 开放麦克风”，"
+        "戴耳机选“耳机麦克风”；若有多个麦克风，再选择对应的输入设备。"
+    )
     try:
         recording = audio_recorder(
             label="🎙️ 录制英文朗读" if language == "en" else "🎙️ 录制中文口译",
