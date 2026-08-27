@@ -181,7 +181,7 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
     with stop_col:
         stop_clicked = st.button("🔇 停止播报", key=stop_key, help="使用开放麦克风时，建议录音前先停止面试官播报")
     with hint_col:
-        st.caption("开放麦克风：录音开始会自动停止播报；保持麦克风距嘴 30–60 厘米。点击录音控件上的停止按钮结束录音，最长 3 分钟。")
+        st.caption("开放麦克风：录音开始会自动停止播报；保持麦克风距嘴 30–60 厘米。点击录音控件上的停止按钮结束录音，最长 10 分钟。")
     if stop_clicked:
         _stop_speech()
 
@@ -189,7 +189,7 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
         recording = audio_recorder(
             label="🎙️ 录音回答（可选）",
             key=widget_key,
-            max_seconds=180,
+            max_seconds=600,
             open_microphone=True,
         )
     except VoiceCaptureError as exc:
@@ -756,7 +756,7 @@ def render_literature_translation():
         st.markdown(f"**{material['title']}**")
         st.write(material["text"])
         st.caption("建议朗读速度：每分钟约 100–160 词。")
-        transcript, duration = _capture_literature_voice("en", f"lit_reading_voice_{material['id']}", 300)
+        transcript, duration = _capture_literature_voice("en", f"lit_reading_voice_{material['id']}", 600)
         if transcript:
             if st.button("✅ 提交朗读并开始一分钟准备", type="primary", use_container_width=True):
                 checked = st.session_state.get("lit_en_transcript_edit", transcript).strip()

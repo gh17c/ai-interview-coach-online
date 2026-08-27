@@ -3,6 +3,7 @@ import math
 import struct
 import unittest
 import wave
+import inspect
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -23,6 +24,11 @@ def make_wav(amplitude: int = 0, duration: float = 1.0, sample_rate: int = 16000
 
 
 class VoiceTests(unittest.TestCase):
+    def test_recorder_defaults_to_ten_minute_safety_limit(self):
+        from modules.voice import audio_recorder
+
+        self.assertEqual(inspect.signature(audio_recorder).parameters["max_seconds"].default, 600)
+
     def test_audio_signal_stats_detect_silent_recording(self):
         from modules.voice import audio_signal_stats
 

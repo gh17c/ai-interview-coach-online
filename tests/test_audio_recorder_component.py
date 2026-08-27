@@ -42,7 +42,7 @@ class AudioRecorderComponentTests(unittest.TestCase):
     def test_recorder_uses_long_safety_limit_and_manual_stop(self):
         source = COMPONENT_SOURCE.read_text(encoding="utf-8")
 
-        self.assertIn("let maxSeconds = 180", source)
+        self.assertIn("let maxSeconds = 600", source)
         self.assertIn("Math.min(600", source)
         self.assertIn("mediaRecorder.stop()", source)
         self.assertIn("最长还可录", source)

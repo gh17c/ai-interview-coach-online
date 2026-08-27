@@ -66,7 +66,7 @@ def audio_recorder(
     *,
     label: str = "🎙️ 录音回答（可选）",
     key: str,
-    max_seconds: int = 180,
+    max_seconds: int = 600,
     open_microphone: bool = True,
     audio_mode: str = "auto",
 ) -> Optional[dict]:
