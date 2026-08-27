@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8" /><style>
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+#timer { border: 1px solid #d0d7de; border-radius: 8px; padding: 14px; text-align: center; font-size: 28px; font-weight: 700; color: #1f2937; }
+#caption { margin-top: 6px; font-size: 13px; color: #57606a; font-weight: 400; }
+</style></head><body><div id="timer">01:00<div id="caption">准备时间</div></div><script>
+(() => { let deadline = 0; let finished = false;
+const post = (type, payload) => parent.postMessage(Object.assign({isStreamlitMessage:true,type}, payload || {}), "*");
+const resize = () => post("streamlit:setFrameHeight", {height: document.body.scrollHeight});
+function draw() { const remaining = Math.max(0, deadline - Date.now()); const seconds = Math.ceil(remaining / 1000); document.getElementById("timer").firstChild.nodeValue = String(Math.floor(seconds / 60)).padStart(2,"0") + ":" + String(seconds % 60).padStart(2,"0"); if (remaining <= 0 && !finished) { finished = true; post("streamlit:setComponentValue", {value:{status:"complete"}, dataType:"json"}); } }
+window.addEventListener("message", (event) => { const data = event.data || {}; if (data.type !== "streamlit:render") return; const next = Number((data.args || {}).deadline_ms || 0); if (next && next !== deadline) { deadline = next; finished = false; } draw(); resize(); });
+setInterval(draw, 250); post("streamlit:componentReady", {apiVersion:1}); resize();
+})();
+</script></body></html>

@@ -10,6 +10,8 @@ import time
 import random
 import hashlib
 import json
+import math
+from typing import Optional
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,7 +29,8 @@ from modules.interviewer import (
 from modules.evaluator import evaluate_answer, generate_full_report
 from modules.history import save_session, list_sessions, load_session, delete_session, log_pool_generation
 from modules.knowledge_base import get_random_insights
-from modules.voice import transcribe_audio
+from modules.voice import VoiceCaptureError, audio_recorder, transcribe_audio
+from modules.literature_interview import get_random_material, score_reading, evaluate_translation
 
 
 st.set_page_config(page_title="AI 学术面试教练", page_icon="🎓", layout="wide")
@@ -39,10 +42,23 @@ DEFAULTS = {
     "report": None, "single_practice_dim": None, "single_practice_count": 0,
     "profile_step": "fill",
     "voice_audio_hash": "",
+    "voice_error_hash": "",
     "voice_transcript": "",
     "voice_last_spoken_id": "",
     "smart_import_processed_id": "",
+    "lit_material": None,
+    "lit_stage": "reading",
+    "lit_reading_result": None,
+    "lit_translation_result": None,
+    "lit_deadline": 0.0,
+    "lit_voice_audio_hash": "",
+    "lit_voice_error_hash": "",
+    "lit_voice_transcript": "",
+    "lit_voice_duration": 0.0,
+    "lit_saved": False,
 }
+
+_COUNTDOWN_COMPONENT = None
 
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
@@ -90,7 +106,7 @@ with st.sidebar:
                 st.caption("温度：0.7 | 策略：Few-shot引导 + 防重复约束")
 
     # 面试中途退出按钮
-    if st.session_state.page == "interview":
+    if st.session_state.page == "interview" and st.session_state.mode != "literature_translation":
         st.divider()
         if st.button("🚪 退出面试", use_container_width=True, key="nav_exit", type="secondary"):
             # 保存当前进度
@@ -132,23 +148,62 @@ with st.sidebar:
 def _clear_voice_state():
     """清理上一道题的语音录音与识别结果。"""
     st.session_state.voice_audio_hash = ""
+    st.session_state.voice_error_hash = ""
     st.session_state.voice_transcript = ""
     # 不在本次运行中修改已渲染的 text_area widget 状态；下一次录音时会覆盖它。
 
 
 def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
     """显示录音控件并返回识别文本，以及本次是否刚完成新的识别。"""
-    audio = st.audio_input("🎙️ 录音回答（可选）", key=widget_key)
+    stop_key = f"stop_speech_{hashlib.sha1(widget_key.encode('utf-8')).hexdigest()[:12]}"
+    stop_col, hint_col = st.columns([1, 5])
+    with stop_col:
+        stop_clicked = st.button("🔇 停止播报", key=stop_key, help="使用开放麦克风时，建议录音前先停止面试官播报")
+    with hint_col:
+        st.caption("开放麦克风：录音开始会自动停止播报；保持麦克风距嘴 30–60 厘米，再录 5–15 秒。")
+    if stop_clicked:
+        _stop_speech()
+
+    try:
+        recording = audio_recorder(
+            label="🎙️ 录音回答（可选）",
+            key=widget_key,
+            max_seconds=30,
+            open_microphone=True,
+        )
+    except VoiceCaptureError as exc:
+        st.error(f"录音控件无法加载：{exc}")
+        recording = None
     newly_transcribed = False
 
-    if audio is not None:
-        audio_bytes = audio.getvalue()
+    if recording:
+        audio_bytes = recording["audio_bytes"]
         audio_hash = hashlib.sha256(audio_bytes).hexdigest()
-        if audio_hash != st.session_state.get("voice_audio_hash", ""):
+        if (
+            audio_hash != st.session_state.get("voice_audio_hash", "")
+            and audio_hash != st.session_state.get("voice_error_hash", "")
+        ):
+            duration = recording.get("duration_seconds", 0.0)
+            rms = recording.get("rms", 0.0)
+            peak = recording.get("peak", 0.0)
+            dbfs = 20 * math.log10(max(rms, 1e-9))
+            st.caption(
+                f"录音诊断：{duration:.1f} 秒 · 输入音量 {dbfs:.1f} dBFS · 峰值 {peak:.3f}"
+            )
+            processing = recording.get("processing") or {}
+            if any(processing.get(name) is True for name in (
+                "echoCancellation", "noiseSuppression", "autoGainControl"
+            )):
+                st.warning("浏览器仍启用了部分回声/降噪处理；开放扬声器时请降低音量，或改用耳机。")
             try:
                 with st.spinner("🎧 正在识别语音..."):
-                    transcript = transcribe_audio(audio_bytes, getattr(audio, "name", "answer.wav"))
+                    transcript = transcribe_audio(
+                        audio_bytes,
+                        recording.get("filename", "answer.webm"),
+                        client_stats=recording,
+                    )
                 st.session_state.voice_audio_hash = audio_hash
+                st.session_state.voice_error_hash = ""
                 st.session_state.voice_transcript = transcript
                 st.session_state.voice_transcript_edit = transcript
                 newly_transcribed = True
@@ -159,6 +214,13 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
                         "录音已上传，但语音识别返回空结果。请确认录音条有波形、"
                         "使用 Chrome/Edge，并用普通话靠近麦克风再录 5-15 秒。"
                     )
+            except VoiceCaptureError as exc:
+                # Avoid repeating the same failing request on every Streamlit
+                # rerun, while allowing a newly recorded clip to be processed.
+                st.session_state.voice_audio_hash = ""
+                st.session_state.voice_error_hash = audio_hash
+                st.session_state.voice_transcript = ""
+                st.warning(f"⚠️ {exc}")
             except Exception as exc:
                 st.session_state.voice_audio_hash = audio_hash
                 st.session_state.voice_transcript = ""
@@ -172,6 +234,74 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
             height=110,
         )
     return transcript.strip(), newly_transcribed
+
+
+def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) -> tuple[str, float]:
+    """为文献翻译环节录音并转写，和普通问答的语音状态完全隔离。"""
+    try:
+        recording = audio_recorder(
+            label="🎙️ 录制英文朗读" if language == "en" else "🎙️ 录制中文口译",
+            key=widget_key,
+            max_seconds=max_seconds,
+            open_microphone=True,
+        )
+    except VoiceCaptureError as exc:
+        st.error(f"录音控件无法加载：{exc}")
+        recording = None
+
+    if recording:
+        audio_bytes = recording["audio_bytes"]
+        audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+        if (
+            audio_hash != st.session_state.get("lit_voice_audio_hash", "")
+            and audio_hash != st.session_state.get("lit_voice_error_hash", "")
+        ):
+            try:
+                with st.spinner("🎧 正在识别英文朗读..." if language == "en" else "🎧 正在识别中文口译..."):
+                    transcript = transcribe_audio(
+                        audio_bytes,
+                        recording.get("filename", "answer.webm"),
+                        client_stats=recording,
+                        language=language,
+                    )
+                st.session_state.lit_voice_audio_hash = audio_hash
+                st.session_state.lit_voice_error_hash = ""
+                st.session_state.lit_voice_transcript = transcript
+                st.session_state.lit_voice_duration = recording.get("duration_seconds", 0.0)
+                st.session_state.lit_voice_transcript_edit = transcript
+                st.success("语音识别完成。你可以在下方修正转写结果后提交。")
+            except VoiceCaptureError as exc:
+                st.session_state.lit_voice_error_hash = audio_hash
+                st.warning(str(exc))
+            except Exception as exc:
+                st.session_state.lit_voice_audio_hash = audio_hash
+                st.error(f"语音识别失败：{exc}")
+
+    transcript = st.session_state.get("lit_voice_transcript", "")
+    if transcript:
+        edit_key = f"lit_{language}_transcript_edit"
+        transcript = st.text_area(
+            "英文朗读转写（可修改）" if language == "en" else "中文口译转写（可修改）",
+            key=edit_key,
+            height=130 if language == "en" else 180,
+        )
+    return transcript.strip(), float(st.session_state.get("lit_voice_duration", 0.0))
+
+
+def _reset_literature_voice() -> None:
+    st.session_state.lit_voice_audio_hash = ""
+    st.session_state.lit_voice_error_hash = ""
+    st.session_state.lit_voice_transcript = ""
+    st.session_state.lit_voice_duration = 0.0
+
+
+def _render_countdown(deadline: float) -> Optional[dict]:
+    """渲染由浏览器驱动的倒计时，结束后通过组件事件切换阶段。"""
+    global _COUNTDOWN_COMPONENT
+    if _COUNTDOWN_COMPONENT is None:
+        component_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "components", "countdown")
+        _COUNTDOWN_COMPONENT = components.declare_component("ai_interview_countdown", path=component_path)
+    return _COUNTDOWN_COMPONENT(deadline_ms=int(deadline * 1000), default=None, key="literature_countdown")
 
 
 def _speak_text(text: str):
@@ -191,6 +321,37 @@ def _speak_text(text: str):
           utterance.pitch = 1.0;
           window.speechSynthesis.speak(utterance);
         }}
+        </script>
+        """,
+        height=1,
+    )
+
+
+def _stop_speech():
+    """停止当前页面及其父页面中的浏览器语音，避免开放麦克风录入回声。"""
+    components.html(
+        """
+        <script>
+        function cancelInterviewSpeech() {
+          const owners = [window];
+          try { owners.push(window.parent); } catch (error) {}
+          try { owners.push(window.top); } catch (error) {}
+          owners.forEach((owner) => {
+            try {
+              if (owner && owner.speechSynthesis) owner.speechSynthesis.cancel();
+            } catch (error) {}
+          });
+          try {
+            window.parent.document.querySelectorAll('iframe').forEach((frame) => {
+              try {
+                if (frame.contentWindow && frame.contentWindow.speechSynthesis) {
+                  frame.contentWindow.speechSynthesis.cancel();
+                }
+              } catch (error) {}
+            });
+          } catch (error) {}
+        }
+        cancelInterviewSpeech();
         </script>
         """,
         height=1,
@@ -507,6 +668,145 @@ def render_mode_select_page():
             st.session_state.single_practice_count = 0
             st.session_state.page = "interview"
             st.rerun()
+
+    st.divider()
+    st.markdown("### 📚 英文文献翻译面试")
+    st.caption("模拟预推免常见的英文文献环节：朗读材料、准备一分钟、中文口译并获得专业评价。")
+    if st.button("📚 开始英文文献翻译面试", type="primary", use_container_width=True):
+        st.session_state.mode = "literature_translation"
+        st.session_state.lit_material = get_random_material()
+        st.session_state.lit_stage = "reading"
+        st.session_state.lit_reading_result = None
+        st.session_state.lit_translation_result = None
+        st.session_state.lit_deadline = 0.0
+        st.session_state.lit_saved = False
+        _reset_literature_voice()
+        st.session_state.page = "interview"
+        st.rerun()
+
+
+def render_literature_translation():
+    material = st.session_state.get("lit_material") or get_random_material()
+    st.session_state.lit_material = material
+    stage = st.session_state.get("lit_stage", "reading")
+    if st.button("← 返回模式选择", key="lit_back_mode"):
+        st.session_state.page = "mode_select"
+        st.session_state.mode = None
+        _reset_literature_voice()
+        st.rerun()
+    st.title("📚 预推免英文文献翻译面试")
+    st.caption(f"材料方向：{material['field']} · 难度：中等 · 原创训练材料")
+    st.progress({"reading": 0.25, "countdown": 0.5, "translation": 0.75, "result": 1.0}.get(stage, 0.25))
+
+    if stage == "reading":
+        st.subheader("第一环节：英文朗读")
+        st.info("请先通读并朗读下面材料。系统会根据语音转写的完整度、顺序和术语覆盖给出朗读表现分，不等同于专业音素发音评分。")
+        st.markdown(f"**{material['title']}**")
+        st.write(material["text"])
+        st.caption("建议朗读速度：每分钟约 100–160 词。")
+        transcript, duration = _capture_literature_voice("en", f"lit_reading_voice_{material['id']}", 120)
+        if transcript:
+            if st.button("✅ 提交朗读并开始一分钟准备", type="primary", use_container_width=True):
+                checked = st.session_state.get("lit_en_transcript_edit", transcript).strip()
+                st.session_state.lit_reading_result = score_reading(material["text"], checked, duration, material["terms"])
+                st.session_state.lit_stage = "countdown"
+                st.session_state.lit_deadline = time.time() + 60
+                _reset_literature_voice()
+                st.rerun()
+        return
+
+    if stage == "countdown":
+        st.subheader("第二环节：准备中文翻译")
+        st.info("你有一分钟整理译文。倒计时结束后即可录制中文口译；也可以提前点击进入翻译。")
+        reading_result = st.session_state.get("lit_reading_result") or {}
+        if reading_result:
+            st.metric(
+                "📖 朗读完整度与流畅度",
+                f"{reading_result.get('score', 0)}/100",
+                help="根据语音转写的单词覆盖、顺序、关键术语和估算语速计算；不等同于音素级发音评分。",
+            )
+        countdown_value = _render_countdown(st.session_state.lit_deadline)
+        if countdown_value and countdown_value.get("status") == "complete":
+            st.session_state.lit_stage = "translation"
+            _reset_literature_voice()
+            st.rerun()
+        if st.button("▶️ 提前进入翻译", type="primary", use_container_width=True):
+            st.session_state.lit_stage = "translation"
+            _reset_literature_voice()
+            st.rerun()
+        with st.expander("查看原文", expanded=False):
+            st.write(material["text"])
+        return
+
+    if stage == "translation":
+        st.subheader("第三环节：中文口译")
+        st.info("请用中文连续口译原文，尽量保留因果、转折、比较和数据关系。录音结束后可修正识别文本，再提交评价。")
+        with st.expander("查看英文材料", expanded=True):
+            st.write(material["text"])
+        transcript, _ = _capture_literature_voice("zh", f"lit_translation_voice_{material['id']}", 180)
+        if transcript:
+            if st.button("📊 提交口译并获取评价", type="primary", use_container_width=True):
+                answer = st.session_state.get("lit_zh_transcript_edit", transcript).strip()
+                if len(answer) < 10:
+                    st.warning("口译内容过短，请至少完成主要句子的翻译。")
+                else:
+                    with st.spinner("🤖 正在从材料学术角度评价口译..."):
+                        st.session_state.lit_translation_result = evaluate_translation(material, answer)
+                    st.session_state.lit_stage = "result"
+                    if not st.session_state.get("lit_saved", False):
+                        save_session({
+                            "scenario": "literature_translation",
+                            "mode": "literature_translation",
+                            "profile": st.session_state.profile or {},
+                            "messages": [
+                                {"role": "interviewer", "content": material["text"], "dimension": material["title"]},
+                                {"role": "user", "content": answer, "dimension": "中文口译"},
+                            ],
+                            "report": {
+                                "overall_score": st.session_state.lit_translation_result.get("score", 0),
+                                "dimension_scores": {
+                                    "朗读完整度与流畅度": (st.session_state.lit_reading_result or {}).get("score", 0),
+                                    "中文口译": st.session_state.lit_translation_result.get("score", 0),
+                                },
+                                "highlights": st.session_state.lit_translation_result.get("strengths", []),
+                                "improvements": st.session_state.lit_translation_result.get("suggestions", []),
+                                "per_question_feedback": [],
+                                "improvement_plan": st.session_state.lit_translation_result.get("terminology_feedback", []),
+                            },
+                        })
+                        st.session_state.lit_saved = True
+                    _reset_literature_voice()
+                    st.rerun()
+        return
+
+    result = st.session_state.get("lit_translation_result") or {}
+    reading = st.session_state.get("lit_reading_result") or {}
+    st.subheader("面试评价")
+    score_cols = st.columns(5)
+    metrics = [("总评", result.get("score", 0)), ("准确性", result.get("accuracy_score", 0)), ("术语", result.get("terminology_score", 0)), ("完整性", result.get("completeness_score", 0)), ("表达", result.get("expression_score", 0))]
+    for col, (label, value) in zip(score_cols, metrics):
+        with col:
+            st.metric(label, f"{value}/100")
+    st.metric("📖 朗读完整度与流畅度", f"{reading.get('score', 0)}/100")
+    if reading:
+        st.caption(f"识别 {reading.get('recognized_words', 0)}/{reading.get('expected_words', 0)} 词 · 关键术语覆盖 {reading.get('term_score', 0)}% · 估算语速 {reading.get('words_per_minute', 0)} 词/分钟")
+    for title, key in (("✅ 口译优点", "strengths"), ("⚠️ 漏译与误译", "omissions"), ("🔬 术语反馈", "terminology_feedback"), ("🛠 改进建议", "suggestions")):
+        values = result.get(key, [])
+        if values:
+            st.markdown(f"**{title}**")
+            for value in values:
+                st.markdown(f"- {value}")
+    if result.get("reference_translation"):
+        with st.expander("参考译文"):
+            st.write(result["reference_translation"])
+    if st.button("🔄 再来一篇", type="primary", use_container_width=True):
+        st.session_state.lit_material = get_random_material(material["id"])
+        st.session_state.lit_stage = "reading"
+        st.session_state.lit_reading_result = None
+        st.session_state.lit_translation_result = None
+        st.session_state.lit_saved = False
+        _reset_literature_voice()
+        st.rerun()
 
 
 def _render_top_bar():
@@ -1008,7 +1308,12 @@ def render_history_list_page():
         else:
             score = sess.get("score")
             score_str = f"⭐{score}" if score is not None else "未评分"
-            mode_label = "全模拟" if mode == "full_simulation" else "单题练习" if mode == "single_practice" else mode
+            mode_label = (
+                "全模拟" if mode == "full_simulation"
+                else "单题练习" if mode == "single_practice"
+                else "英文文献翻译" if mode == "literature_translation"
+                else mode
+            )
             label = f"**{scenario_name}** — {created}"
             detail = mode_label
             show_detail_btn = True
@@ -1109,6 +1414,8 @@ def render_history_detail_page():
 def render_interview_page():
     if st.session_state.mode == "full_simulation":
         render_full_simulation()
+    elif st.session_state.mode == "literature_translation":
+        render_literature_translation()
     else:
         render_single_practice()
 

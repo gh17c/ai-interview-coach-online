@@ -1,0 +1,70 @@
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+
+class LiteratureInterviewTests(unittest.TestCase):
+    def test_random_material_has_intermediate_length_and_material_terms(self):
+        from modules.literature_interview import MATERIALS, get_random_material
+
+        material = get_random_material()
+        self.assertIn(material["id"], {item["id"] for item in MATERIALS})
+        self.assertGreater(len(material["text"].split()), 100)
+        self.assertGreaterEqual(len(material["terms"]), 6)
+        self.assertTrue(material["reference_translation"])
+
+    def test_random_material_can_exclude_previous_material(self):
+        from modules.literature_interview import MATERIALS, get_random_material
+
+        material = get_random_material(MATERIALS[0]["id"])
+        self.assertNotEqual(material["id"], MATERIALS[0]["id"])
+
+    def test_reading_score_rewards_matching_text_and_reports_terms(self):
+        from modules.literature_interview import MATERIALS, score_reading
+
+        material = MATERIALS[0]
+        result = score_reading(material["text"], material["text"], 60, material["terms"])
+        self.assertGreaterEqual(result["score"], 90)
+        self.assertEqual(result["coverage_score"], 100)
+        self.assertEqual(result["term_score"], 100)
+        self.assertGreater(result["words_per_minute"], 100)
+
+    def test_reading_score_penalizes_empty_transcript(self):
+        from modules.literature_interview import MATERIALS, score_reading
+
+        result = score_reading(MATERIALS[0]["text"], "", 0, MATERIALS[0]["terms"])
+        self.assertLess(result["score"], 40)
+        self.assertTrue(result["missing_words"])
+
+    def test_translation_evaluation_parses_json_and_clamps_scores(self):
+        from modules.literature_interview import MATERIALS, evaluate_translation
+
+        payload = '{"score": 108, "accuracy_score": 85, "terminology_score": 80, "completeness_score": 75, "expression_score": 70, "strengths": ["术语准确"]}'
+        fake_client_result = {"content": payload}
+        with patch("modules.literature_interview.chat", return_value=fake_client_result):
+            result = evaluate_translation(MATERIALS[0], "晶界会影响金属性能。")
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["accuracy_score"], 85)
+        self.assertEqual(result["reference_translation"], MATERIALS[0]["reference_translation"])
+        self.assertTrue(result["strengths"])
+
+    def test_translation_evaluation_has_fallback_when_api_fails(self):
+        from modules.literature_interview import MATERIALS, evaluate_translation
+
+        with patch("modules.literature_interview.chat", side_effect=RuntimeError("offline")):
+            result = evaluate_translation(MATERIALS[0], "测试译文")
+        self.assertEqual(result["score"], 0)
+        self.assertTrue(result["reference_translation"])
+        self.assertTrue(result["suggestions"])
+
+    def test_countdown_component_emits_completion_event(self):
+        source = (Path(__file__).resolve().parents[1] / "components" / "countdown" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("streamlit:componentReady", source)
+        self.assertIn("streamlit:setComponentValue", source)
+        self.assertIn('status:"complete"', source)
+        self.assertIn("setInterval(draw", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
