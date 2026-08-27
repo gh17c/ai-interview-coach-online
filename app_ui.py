@@ -181,7 +181,7 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
     with stop_col:
         stop_clicked = st.button("🔇 停止播报", key=stop_key, help="使用开放麦克风时，建议录音前先停止面试官播报")
     with hint_col:
-        st.caption("开放麦克风：录音开始会自动停止播报；保持麦克风距嘴 30–60 厘米，再录 5–15 秒。")
+        st.caption("开放麦克风：录音开始会自动停止播报；保持麦克风距嘴 30–60 厘米。点击录音控件上的停止按钮结束录音，最长 3 分钟。")
     if stop_clicked:
         _stop_speech()
 
@@ -189,7 +189,7 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
         recording = audio_recorder(
             label="🎙️ 录音回答（可选）",
             key=widget_key,
-            max_seconds=30,
+            max_seconds=180,
             open_microphone=True,
         )
     except VoiceCaptureError as exc:
@@ -233,7 +233,7 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
                 else:
                     st.warning(
                         "录音已上传，但语音识别返回空结果。请确认录音条有波形、"
-                        "使用 Chrome/Edge，并用普通话靠近麦克风再录 5-15 秒。"
+                        "使用 Chrome/Edge，并用普通话靠近麦克风重新录音。"
                     )
             except VoiceCaptureError as exc:
                 # Avoid repeating the same failing request on every Streamlit
@@ -756,7 +756,7 @@ def render_literature_translation():
         st.markdown(f"**{material['title']}**")
         st.write(material["text"])
         st.caption("建议朗读速度：每分钟约 100–160 词。")
-        transcript, duration = _capture_literature_voice("en", f"lit_reading_voice_{material['id']}", 120)
+        transcript, duration = _capture_literature_voice("en", f"lit_reading_voice_{material['id']}", 300)
         if transcript:
             if st.button("✅ 提交朗读并开始一分钟准备", type="primary", use_container_width=True):
                 checked = st.session_state.get("lit_en_transcript_edit", transcript).strip()
@@ -795,7 +795,7 @@ def render_literature_translation():
         st.info("请用中文连续口译原文，尽量保留因果、转折、比较和数据关系。录音结束后可修正识别文本，再提交评价。")
         with st.expander("查看英文材料", expanded=True):
             st.write(material["text"])
-        transcript, _ = _capture_literature_voice("zh", f"lit_translation_voice_{material['id']}", 180)
+        transcript, _ = _capture_literature_voice("zh", f"lit_translation_voice_{material['id']}", 600)
         if transcript:
             if st.button("📊 提交口译并获取评价", type="primary", use_container_width=True):
                 answer = st.session_state.get("lit_zh_transcript_edit", transcript).strip()

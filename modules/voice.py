@@ -66,7 +66,7 @@ def audio_recorder(
     *,
     label: str = "🎙️ 录音回答（可选）",
     key: str,
-    max_seconds: int = 30,
+    max_seconds: int = 180,
     open_microphone: bool = True,
     audio_mode: str = "auto",
 ) -> Optional[dict]:
@@ -91,7 +91,7 @@ def audio_recorder(
 
     value = _AUDIO_RECORDER_COMPONENT(
         label=label,
-        max_seconds=max(5, min(int(max_seconds), 240)),
+        max_seconds=max(5, min(int(max_seconds), 600)),
         open_microphone=bool(open_microphone),
         audio_mode=str(audio_mode or "auto"),
         default=None,
@@ -299,7 +299,7 @@ def transcribe_audio(
         raise VoiceCaptureError(
             "没有检测到清晰人声。录音开始时会自动停止播报；"
             "把麦克风靠近嘴部约 30–60 厘米，并确认系统输入音量不是静音；"
-            "然后重新录一段 5–15 秒的回答。"
+            "然后重新录音；录音时间可按回答需要决定。"
         )
     if stats.get("track_muted"):
         _log_audio_event(

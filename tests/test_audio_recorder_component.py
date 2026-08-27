@@ -38,3 +38,11 @@ class AudioRecorderComponentTests(unittest.TestCase):
         self.assertIn("streamlit:componentReady", source)
         self.assertIn("streamlit:setComponentValue", source)
         self.assertIn("audio_base64", source)
+
+    def test_recorder_uses_long_safety_limit_and_manual_stop(self):
+        source = COMPONENT_SOURCE.read_text(encoding="utf-8")
+
+        self.assertIn("let maxSeconds = 180", source)
+        self.assertIn("Math.min(600", source)
+        self.assertIn("mediaRecorder.stop()", source)
+        self.assertIn("最长还可录", source)

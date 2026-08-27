@@ -183,7 +183,7 @@
           activeSamples: 0,
         };
         let processingSettings = {};
-        let maxSeconds = 30;
+        let maxSeconds = 180;
         let currentMime = "";
         let selectedDeviceId = "";
         let devicesLoaded = false;
@@ -595,7 +595,10 @@
             elapsedTimer = setInterval(() => {
               const seconds = (Date.now() - startedAt) / 1000;
               if (seconds >= maxSeconds) finishRecording();
-              else setStatus("正在录音… " + Math.floor(seconds) + " 秒", "ok");
+              else {
+                const remaining = Math.max(0, Math.ceil(maxSeconds - seconds));
+                setStatus("正在录音… " + Math.floor(seconds) + " 秒（最长还可录 " + remaining + " 秒）", "ok");
+              }
             }, 500);
           } catch (error) {
             cleanupStream();
@@ -640,7 +643,7 @@
           if (message.type !== "streamlit:render") return;
           const args = message.args || {};
           label.textContent = args.label || "🎙️ 录音回答（可选）";
-          maxSeconds = Math.max(5, Number(args.max_seconds || 30));
+          maxSeconds = Math.max(5, Math.min(600, Number(args.max_seconds || 180)));
           if (args.audio_mode && ["auto", "speaker", "headset"].indexOf(args.audio_mode) >= 0) {
             selectedMode = args.audio_mode;
             modeSelect.value = selectedMode;
