@@ -249,11 +249,15 @@ def transcribe_audio(
             client_rms = max(0.0, float(client_stats.get("rms", 0.0)))
             client_peak = max(0.0, float(client_stats.get("peak", 0.0)))
             client_duration = max(0.0, float(client_stats.get("duration_seconds", 0.0)))
+            parsed_rms = max(0.0, float(stats.get("rms", 0.0)))
+            parsed_peak = max(0.0, float(stats.get("peak", 0.0)))
+            effective_rms = max(parsed_rms, client_rms)
+            effective_peak = max(parsed_peak, client_peak)
             stats.update(
                 duration_seconds=client_duration or stats.get("duration_seconds", 0.0),
-                rms=client_rms,
-                peak=client_peak,
-                dbfs=20.0 * math.log10(max(client_rms, 1e-9)),
+                rms=effective_rms,
+                peak=effective_peak,
+                dbfs=20.0 * math.log10(max(effective_rms, 1e-9)),
                 client_meter=True,
                 processing=client_stats.get("processing", {})
                 if isinstance(client_stats.get("processing"), dict)
@@ -271,10 +275,13 @@ def transcribe_audio(
                 # solely on the meter; the payload-density check below catches
                 # the genuinely empty WebM files seen in practice.
                 is_silent=(
-                    client_rms < 0.0015
-                    and client_peak < 0.01
+                    effective_rms < 0.0015
+                    and effective_peak < 0.01
                     and float(client_stats.get("active_ratio", 0.0) or 0.0) < 0.01
-                    and len(audio_bytes) < max(4096, int(client_duration * 700))
+                    and (
+                        stats.get("parseable")
+                        or len(audio_bytes) < max(4096, int(client_duration * 700))
+                    )
                 ),
             )
         except (TypeError, ValueError):

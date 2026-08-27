@@ -136,6 +136,29 @@ class VoiceTests(unittest.TestCase):
             )
         self.assertEqual(result, "driver audio")
 
+    def test_transcription_uses_server_wav_signal_when_browser_meter_is_zero(self):
+        from modules.voice import transcribe_audio
+
+        calls = {}
+
+        def create(**kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(text="wav signal")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(
+                make_wav(amplitude=8000, duration=1.0),
+                "answer.wav",
+                client_stats={"duration_seconds": 1.0, "rms": 0.0, "peak": 0.0},
+            )
+        self.assertEqual(result, "wav signal")
+        self.assertEqual(calls["file"][2], "audio/wav")
+
 
 if __name__ == "__main__":
     unittest.main()

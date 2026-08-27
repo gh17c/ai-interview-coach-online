@@ -557,6 +557,9 @@
           setStatus("正在请求麦克风权限…");
           try {
             stream = await requestMicrophone();
+            // Permission has now been granted, so browsers can reveal real
+            // device labels and IDs for the next recording.
+            await refreshDevices();
             inspectProcessingSettings();
             currentMime = supportedMimeType();
             if (!window.MediaRecorder) throw new Error("MediaRecorder unavailable");
