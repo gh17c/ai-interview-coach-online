@@ -268,7 +268,8 @@ def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) 
                 st.session_state.lit_voice_error_hash = ""
                 st.session_state.lit_voice_transcript = transcript
                 st.session_state.lit_voice_duration = recording.get("duration_seconds", 0.0)
-                st.session_state.lit_voice_transcript_edit = transcript
+                edit_key = f"lit_{language}_transcript_edit"
+                st.session_state[edit_key] = transcript
                 st.success("语音识别完成。你可以在下方修正转写结果后提交。")
             except VoiceCaptureError as exc:
                 st.session_state.lit_voice_error_hash = audio_hash
@@ -293,6 +294,8 @@ def _reset_literature_voice() -> None:
     st.session_state.lit_voice_error_hash = ""
     st.session_state.lit_voice_transcript = ""
     st.session_state.lit_voice_duration = 0.0
+    st.session_state.lit_en_transcript_edit = ""
+    st.session_state.lit_zh_transcript_edit = ""
 
 
 def _render_countdown(deadline: float) -> Optional[dict]:
