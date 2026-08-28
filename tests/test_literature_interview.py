@@ -38,6 +38,21 @@ class LiteratureInterviewTests(unittest.TestCase):
         material = get_random_material(field="不存在的方向")
         self.assertIn(material["id"], {item["id"] for item in MATERIALS})
 
+    def test_material_library_covers_core_materials_directions(self):
+        from modules.literature_interview import list_material_fields
+
+        fields = set(list_material_fields())
+        self.assertTrue({"电子材料", "无机非金属材料", "陶瓷材料", "电池材料"}.issubset(fields))
+        self.assertTrue({"高分子材料", "生物医用材料", "表面工程与腐蚀", "计算材料与模拟"}.issubset(fields))
+
+    def test_each_material_has_sufficient_translation_content(self):
+        from modules.literature_interview import MATERIALS
+
+        for material in MATERIALS:
+            self.assertGreater(len(material["text"].split()), 100, material["id"])
+            self.assertGreaterEqual(len(material["terms"]), 8, material["id"])
+            self.assertTrue(material["reference_translation"], material["id"])
+
     def test_reading_score_rewards_matching_text_and_reports_terms(self):
         from modules.literature_interview import MATERIALS, score_reading
 

@@ -86,6 +86,110 @@ MATERIALS = (
         "terms": ["precipitation strengthening", "solution treatment", "quenching", "aging", "precipitates", "dislocation motion", "ultimate tensile strength", "overaged state", "electrical conductivity"],
         "reference_translation": "析出强化是提高可热处理铝合金强度的有效方法。固溶处理和淬火后，研究人员将合金在180摄氏度下进行不同时长的时效。时效早期形成的细小析出相会阻碍位错运动，因此硬度和抗拉强度提高。时效时间过长会使析出相粗化，削弱其阻碍位错的能力。过时效状态强度较低，但导电性更好。因此，应根据所需的性能平衡选择时效时间。",
     },
+    {
+        "id": "electronic-thin-film",
+        "title": "Defect engineering in oxide semiconductor thin films",
+        "field": "电子材料",
+        "text": (
+            "Oxide semiconductor thin films are promising for transparent transistors because they combine optical transparency with relatively high carrier mobility. "
+            "Their electrical behavior is strongly affected by oxygen vacancies and by the roughness of the dielectric interface. In this work, an indium-free zinc tin oxide film was deposited by solution processing and then annealed under different oxygen partial pressures. "
+            "Annealing in a mildly oxidizing atmosphere reduced the concentration of deep defect states and lowered the off-state current. However, excessive oxidation also decreased the carrier concentration and slowed the switching response. "
+            "The results show that defect control must be balanced with carrier transport rather than optimized by maximizing oxygen content alone. Interface passivation further improved bias stability during prolonged operation."
+        ),
+        "terms": ["oxide semiconductor", "thin film", "carrier mobility", "oxygen vacancies", "dielectric interface", "oxygen partial pressure", "defect states", "off-state current", "carrier concentration", "interface passivation"],
+        "reference_translation": "氧化物半导体薄膜兼具光学透明性和较高的载流子迁移率，因此适用于透明晶体管。其电学行为会受到氧空位以及介电层界面粗糙度的显著影响。本研究采用溶液法沉积无铟锌锡氧化物薄膜，并在不同氧分压下进行退火。温和的氧化气氛能够降低深能级缺陷态的浓度和关态电流；但氧化过度也会降低载流子浓度，使开关响应变慢。结果表明，缺陷调控需要与载流子输运相平衡，而不能只追求更高的含氧量。界面钝化还提高了器件长时间工作时的偏压稳定性。",
+    },
+    {
+        "id": "inorganic-glass",
+        "title": "Strength and durability of alkali-activated inorganic binders",
+        "field": "无机非金属材料",
+        "text": (
+            "Alkali-activated binders can use industrial by-products to produce cementless construction materials with lower process emissions. Their performance depends on the dissolution of the precursor, the chemistry of the activating solution and the development of a continuous gel network. "
+            "A series of binders was prepared from granulated slag with different silicate-to-hydroxide ratios. Increasing the silicate fraction initially accelerated strength development because more polymeric species were available for gel formation. "
+            "When the solution became too viscous, nevertheless, mixing defects and entrapped pores increased. Specimens exposed to wet-dry cycles retained most of their compressive strength, while specimens stored in a concentrated sulfate solution showed surface decalcification. "
+            "These observations indicate that mixture design and curing humidity should be considered together when durability is evaluated."
+        ),
+        "terms": ["alkali-activated binder", "industrial by-products", "process emissions", "precursor", "activating solution", "gel network", "silicate-to-hydroxide ratio", "polymeric species", "compressive strength", "sulfate solution"],
+        "reference_translation": "碱激发胶凝材料可以利用工业副产物制备低工艺排放的无水泥建筑材料。其性能取决于前驱体的溶解、激发溶液的化学组成以及连续凝胶网络的形成。研究人员以粒化炉渣为原料，制备了具有不同硅酸盐与氢氧化物比例的胶凝材料。提高硅酸盐比例起初会加快强度发展，因为体系中有更多聚合物种类参与凝胶形成；但当溶液黏度过高时，搅拌缺陷和残留孔隙会增加。经历干湿循环后，试样仍保留了大部分抗压强度，而在高浓度硫酸盐溶液中养护的试样出现了表面脱钙。这说明评价耐久性时，应同时考虑配比设计和养护湿度。",
+    },
+    {
+        "id": "advanced-ceramic",
+        "title": "Thermal shock resistance of porous silicon nitride ceramics",
+        "field": "陶瓷材料",
+        "text": (
+            "Porous silicon nitride ceramics are attractive for thermal protection and filtration because they retain strength at high temperature while providing a low-density structure. The main challenge is to introduce connected pores without creating an easy path for catastrophic fracture. "
+            "In this study, pore formers with two particle sizes were blended with silicon nitride powder and removed during firing. The bimodal pore structure increased permeability and reduced the mismatch between the ceramic skeleton and the surrounding gas. "
+            "After repeated heating and cooling, samples with a narrow pore-size distribution developed long cracks, whereas the bimodal samples mainly showed stable microcrack growth. Mechanical strength still decreased as total porosity increased, but the loss was smaller when the pore walls were reinforced by elongated beta-silicon nitride grains. "
+            "The results emphasize that pore connectivity, pore size distribution and grain morphology must be designed together."
+        ),
+        "terms": ["porous silicon nitride", "thermal protection", "low-density structure", "pore former", "bimodal pore structure", "permeability", "thermal shock", "pore-size distribution", "microcrack", "grain morphology"],
+        "reference_translation": "多孔氮化硅陶瓷在高温下仍能保持强度，同时具有低密度结构，因此适用于热防护和过滤。其主要难点是在引入连通孔隙的同时，避免形成导致灾难性断裂的易裂通道。本研究将两种粒径的造孔剂与氮化硅粉末混合，并在烧结过程中将其去除。双峰孔结构提高了渗透率，降低了陶瓷骨架与周围气体之间的不匹配。反复加热和冷却后，孔径分布较窄的试样形成了长裂纹，而双峰结构试样主要表现为稳定的微裂纹扩展。总孔隙率增加仍会降低强度，但当孔壁由细长的β-氮化硅晶粒增强时，强度损失较小。结果强调，孔隙连通性、孔径分布和晶粒形貌需要协同设计。",
+    },
+    {
+        "id": "lithium-battery-cathode",
+        "title": "Surface stabilization of high-nickel lithium-ion cathodes",
+        "field": "电池材料",
+        "text": (
+            "High-nickel layered oxide cathodes offer high specific capacity for lithium-ion batteries, but their surfaces can react with the electrolyte during charging to a high voltage. This reaction produces an unstable interphase, releases oxygen and accelerates transition-metal dissolution. "
+            "A thin phosphate coating was applied to the cathode particles by a wet-chemical route. The coating was sufficiently continuous to suppress direct contact with the electrolyte, yet thin enough to preserve lithium-ion diffusion. "
+            "Electrochemical tests showed a smaller impedance increase and better capacity retention after 200 cycles at elevated temperature. Post-mortem microscopy revealed fewer surface cracks and less rock-salt reconstruction. If the coating was made too thick, however, the initial rate capability decreased because lithium transport became sluggish. "
+            "Therefore, surface modification should be optimized by considering both interfacial stability and ion-transport resistance."
+        ),
+        "terms": ["high-nickel layered oxide", "specific capacity", "electrolyte", "interphase", "oxygen release", "transition-metal dissolution", "phosphate coating", "lithium-ion diffusion", "capacity retention", "surface crack", "rock-salt reconstruction"],
+        "reference_translation": "高镍层状氧化物正极为锂离子电池提供了较高的比容量，但在高电压充电时，其表面可能与电解液发生反应。这种反应会形成不稳定的界面膜，释放氧气，并加速过渡金属溶出。研究人员通过湿化学方法在正极颗粒表面制备了薄磷酸盐涂层。该涂层足够连续，可以抑制正极与电解液的直接接触，同时又足够薄，不会阻碍锂离子扩散。电化学测试表明，在高温下循环200次后，涂层样品的阻抗增长更小，容量保持率更高。循环后的显微观察还发现表面裂纹和岩盐相重构减少。然而，涂层过厚会使锂离子传输变慢，导致初始倍率性能下降。因此，表面改性必须同时考虑界面稳定性和离子传输阻力。",
+    },
+    {
+        "id": "polymer-composite",
+        "title": "Reversible crosslinking in recyclable polymer composites",
+        "field": "高分子材料",
+        "text": (
+            "Thermoset polymers provide dimensional stability and chemical resistance, but their permanent crosslinked networks make mechanical recycling difficult. A recyclable epoxy was designed with exchangeable ester bonds that can rearrange when a catalyst is activated. "
+            "Glass fibers were incorporated to improve stiffness, and the composite was cured at a temperature compatible with conventional processing. Tensile testing showed that the initial modulus was comparable to that of a commercial epoxy, while fracture toughness increased because the reversible bonds dissipated energy near a crack tip. "
+            "When the composite was heated with a mild catalyst, the matrix softened without decomposing the fibers, allowing the reinforcement to be separated and reused. Recycled laminates retained most of their stiffness but showed a moderate reduction in interlaminar strength. "
+            "The study demonstrates that molecular design can link durability during service with recoverability at the end of a product's life."
+        ),
+        "terms": ["thermoset polymer", "crosslinked network", "mechanical recycling", "exchangeable ester bond", "catalyst", "glass fiber", "fracture toughness", "crack tip", "interlaminar strength", "recoverability"],
+        "reference_translation": "热固性聚合物具有尺寸稳定性和耐化学性，但其永久交联网络使机械回收变得困难。研究人员设计了一种含可交换酯键的可回收环氧树脂，在催化剂被激活时，这些酯键可以发生重排。为提高刚度，体系中加入了玻璃纤维，并在适合传统加工的温度下固化。拉伸测试表明，该复合材料的初始模量与商用环氧树脂相当；由于可逆键能够在裂纹尖端附近耗散能量，其断裂韧性有所提高。用温和催化剂加热时，基体软化但纤维不会分解，从而可以分离并重复使用增强体。回收后的层合板保留了大部分刚度，但层间强度有所下降。该研究说明，分子设计可以将服役期间的耐久性与产品寿命结束后的可回收性结合起来。",
+    },
+    {
+        "id": "biomedical-implant",
+        "title": "Surface modification of titanium for bone implants",
+        "field": "生物医用材料",
+        "text": (
+            "Titanium alloys are widely used for bone implants because they combine high specific strength with good corrosion resistance. Nevertheless, a bare metallic surface does not always provide sufficient biological cues for rapid bone integration. In this study, a porous oxide layer was produced by electrochemical treatment and then functionalized with a calcium-phosphate coating. "
+            "The porous layer increased the available surface area, while the ceramic coating improved wettability and promoted the attachment of osteoblast-like cells. Immersion tests in a simulated body fluid produced apatite deposits without a significant loss of coating adhesion. "
+            "The treatment also reduced the release of metallic ions during a long-term corrosion test. Excessive porosity, however, weakened the surface and made it more vulnerable to fretting damage. "
+            "The results suggest that implant design must balance biological activity, mechanical integrity and resistance to wear at the same interface."
+        ),
+        "terms": ["titanium alloy", "bone implant", "specific strength", "bone integration", "porous oxide layer", "electrochemical treatment", "calcium phosphate", "wettability", "osteoblast-like cell", "apatite", "fretting damage"],
+        "reference_translation": "钛合金兼具较高的比强度和良好的耐腐蚀性，因此被广泛用于骨植入物。然而，裸露的金属表面并不总能为快速骨整合提供充分的生物学信号。本研究通过电化学处理制备多孔氧化层，然后在其表面构建磷酸钙涂层。多孔层增加了有效表面积，陶瓷涂层则改善了润湿性并促进成骨样细胞附着。在模拟体液中浸泡后，表面形成了磷灰石沉积，且涂层附着力没有明显降低。该处理还减少了长期腐蚀试验中的金属离子释放。但孔隙率过高会削弱表面，使其更容易发生微动磨损。结果表明，植入物设计需要在同一界面上平衡生物活性、机械完整性和耐磨性。",
+    },
+    {
+        "id": "corrosion-coating",
+        "title": "Self-healing coatings for corrosion protection",
+        "field": "表面工程与腐蚀",
+        "text": (
+            "Organic coatings protect steel by separating the metal from water and aggressive ions, but scratches can create localized corrosion cells. A self-healing coating was prepared by embedding inhibitor-loaded microcapsules in an epoxy matrix. When a scratch ruptured the capsules, the inhibitor was released and reacted with the exposed steel surface. "
+            "Electrochemical impedance measurements showed that the damaged coating recovered a substantial fraction of its barrier resistance after several hours in a saline environment. The healing response was faster at higher capsule concentrations, yet excessive capsules reduced adhesion and introduced weak interfaces. "
+            "Microscopy confirmed that the released inhibitor formed a compact film near the defect rather than sealing the entire coating. Long-term immersion still revealed gradual loss of protection as the capsules were depleted. "
+            "Therefore, practical self-healing systems require a compromise between local response, coating cohesion and the amount of stored inhibitor."
+        ),
+        "terms": ["organic coating", "localized corrosion", "self-healing coating", "microcapsule", "corrosion inhibitor", "epoxy matrix", "electrochemical impedance", "barrier resistance", "saline environment", "coating cohesion"],
+        "reference_translation": "有机涂层通过隔绝水和侵蚀性离子来保护钢材，但划痕可能形成局部腐蚀电池。研究人员将装有缓蚀剂的微胶囊嵌入环氧树脂基体，制备了自修复涂层。当划痕使胶囊破裂时，缓蚀剂被释放并与裸露的钢表面反应。电化学阻抗测试显示，受损涂层在盐水环境中放置数小时后，屏蔽电阻恢复了相当一部分。提高胶囊浓度可以加快修复响应，但胶囊过多会降低附着力并引入弱界面。显微观察证实，释放出的缓蚀剂在缺陷附近形成致密膜，而不是封闭整个涂层。长期浸泡仍表明，随着胶囊逐渐耗尽，保护作用会慢慢减弱。因此，实用的自修复体系需要在局部响应、涂层内聚力和缓蚀剂储量之间取得平衡。",
+    },
+    {
+        "id": "computational-materials",
+        "title": "Combining simulation and experiments to design lightweight alloys",
+        "field": "计算材料与模拟",
+        "text": (
+            "Computational materials design can narrow the search space before an alloy is produced, but predictions are useful only when they are connected to measurable microstructures. A combined workflow was used to screen aluminum-magnesium compositions with low density and improved yield strength. "
+            "First-principles calculations estimated the stability of solute configurations, while a phase-field model predicted the size and spacing of precipitates during aging. Several compositions were then cast and characterized by electron microscopy and tensile testing. "
+            "The experiments confirmed the predicted trend in precipitation density, although the absolute strength was lower than the calculation suggested because casting defects were not included in the model. Adding a defect-sensitive correction improved the agreement for later batches. "
+            "This example shows that simulation should guide experiments iteratively, with uncertainty and processing history treated as part of the material design problem."
+        ),
+        "terms": ["computational materials design", "microstructure", "aluminum-magnesium alloy", "first-principles calculation", "solute configuration", "phase-field model", "precipitate", "electron microscopy", "casting defect", "uncertainty quantification"],
+        "reference_translation": "计算材料设计可以在制备合金之前缩小搜索范围，但只有与可测量的微观结构联系起来，预测结果才具有实际价值。研究人员采用联合流程筛选铝镁合金成分，以获得低密度和较高屈服强度。首先利用第一性原理计算估算溶质构型的稳定性，再用相场模型预测时效过程中析出相的尺寸和间距。随后铸造并表征了多种成分，开展电子显微观察和拉伸测试。实验验证了析出密度的预测趋势，但实测强度低于计算结果，因为模型没有考虑铸造缺陷。加入对缺陷敏感的修正后，后续批次的预测与实验更加吻合。这个例子表明，模拟应当以迭代方式指导实验，同时要把不确定性和加工历史视为材料设计问题的一部分。",
+    },
 )
 
 
