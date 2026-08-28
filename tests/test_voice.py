@@ -24,6 +24,53 @@ def make_wav(amplitude: int = 0, duration: float = 1.0, sample_rate: int = 16000
 
 
 class VoiceTests(unittest.TestCase):
+    def test_clean_transcript_filters_hesitations_and_normalizes_material_terms(self):
+        from modules.voice import clean_transcript
+
+        result = clean_transcript(
+            "嗯嗯，这个晶界面啊会影响奥氏体钢的性能。",
+            language="zh",
+        )
+
+        self.assertEqual(result["text"], "这个晶界会影响奥氏体不锈钢的性能")
+        self.assertEqual(result["raw_text"], "嗯嗯，这个晶界面啊会影响奥氏体钢的性能。")
+        self.assertEqual(result["fillers_removed"], ["嗯嗯", "啊"])
+        self.assertEqual(
+            [item["to"] for item in result["term_corrections"]],
+            ["晶界", "奥氏体不锈钢"],
+        )
+
+    def test_clean_transcript_handles_english_hesitations_and_hyphenation(self):
+        from modules.voice import clean_transcript
+
+        result = clean_transcript(
+            "uh um grain-boundaries improve thin films.",
+            language="en",
+            term_hints=["grain boundary", "thin film"],
+        )
+
+        self.assertEqual(result["text"], "grain boundaries improve thin films")
+        self.assertEqual(result["fillers_removed"], ["uh", "um"])
+        self.assertIn("grain boundary", result["recognized_terms"])
+        self.assertIn("thin film", result["recognized_terms"])
+
+    def test_clean_transcript_does_not_remove_normal_chinese_content(self):
+        from modules.voice import clean_transcript
+
+        result = clean_transcript("这个材料的性能很重要。", language="zh")
+
+        self.assertEqual(result["text"], "这个材料的性能很重要")
+        self.assertEqual(result["fillers_removed"], [])
+
+    def test_build_stt_prompt_contains_material_term_hints(self):
+        from modules.voice import build_stt_prompt
+
+        prompt = build_stt_prompt(["grain boundary", "thin film"], language="en")
+
+        self.assertIn("grain boundary", prompt)
+        self.assertIn("thin film", prompt)
+        self.assertIn("Materials-science", prompt)
+
     def test_recorder_defaults_to_ten_minute_safety_limit(self):
         from modules.voice import audio_recorder
 
@@ -107,6 +154,60 @@ class VoiceTests(unittest.TestCase):
 
         self.assertEqual(result, "grain boundaries influence metals")
         self.assertEqual(calls["language"], "en")
+
+    def test_transcription_returns_cleaned_text_and_metadata(self):
+        from modules.voice import transcribe_audio
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(
+                    create=lambda **kwargs: SimpleNamespace(text="嗯嗯 晶界面 啊")
+                )
+            )
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(
+                make_wav(amplitude=8000),
+                "answer.wav",
+                term_hints=["grain boundary"],
+                return_metadata=True,
+            )
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["text"], "晶界")
+        self.assertEqual(result["raw_text"], "嗯嗯 晶界面 啊")
+        self.assertEqual(result["fillers_removed"], ["嗯嗯", "啊"])
+        self.assertIn("晶界", result["recognized_terms"])
+
+    def test_transcription_retries_without_prompt_for_unsupported_provider(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            if "prompt" in kwargs:
+                raise RuntimeError("unknown field: prompt")
+            return SimpleNamespace(text="晶界")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(
+                make_wav(amplitude=8000),
+                "answer.wav",
+                term_hints=["grain boundary"],
+            )
+
+        self.assertEqual(result, "晶界")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("prompt", calls[0])
+        self.assertNotIn("prompt", calls[1])
 
     def test_transcription_rejects_silent_browser_recording_using_client_meter(self):
         from modules.voice import VoiceCaptureError, transcribe_audio

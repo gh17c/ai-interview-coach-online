@@ -13,16 +13,263 @@ import os
 import json
 import time
 import math
+import re
 import struct
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from modules.api_client import _get_client
 
 
 DEFAULT_STT_MODEL = "FunAudioLLM/SenseVoiceSmall"
 _AUDIO_RECORDER_COMPONENT = None
+
+
+# 这些别名用于纠正语音识别中常见的同义写法或近似写法。这里只做
+# 高置信度的术语规范化，不对普通中文句子做激进的“智能改写”。
+PROFESSIONAL_TERM_ALIASES = {
+    "晶界": ("晶界面", "晶粒界面"),
+    "奥氏体不锈钢": ("奥氏体钢",),
+    "固溶处理": ("固溶热处理",),
+    "屈服强度": ("屈服应力",),
+    "未熔合缺陷": ("未熔合" ,),
+    "匙孔孔隙": ("匙孔气孔", "钥匙孔孔隙"),
+    "熔池": ("融池",),
+    "陶瓷基复合材料": ("陶瓷基复合", "陶瓷基体复合材料"),
+    "断裂韧性": ("断裂韧度",),
+    "析出强化": ("沉淀强化",),
+    "析出相": ("沉淀相",),
+    "氧空位": ("氧缺位",),
+    "载流子迁移率": ("载流子的迁移率",),
+    "关态电流": ("关断电流", "关闭态电流"),
+    "碱激发胶凝材料": ("碱激活胶凝材料",),
+    "粒化炉渣": ("粒状炉渣",),
+    "抗压强度": ("压缩强度",),
+    "多孔氮化硅陶瓷": ("多孔氮化硅",),
+    "孔隙率": ("气孔率",),
+    "双峰孔结构": ("双模态孔结构",),
+    "电解液": ("电解质溶液",),
+    "高镍层状氧化物": ("高镍层状材料",),
+    "比容量": ("比电容量",),
+    "磷酸盐涂层": ("磷酸盐包覆层",),
+    "倍率性能": ("倍率特性",),
+    "热固性聚合物": ("热固性树脂",),
+    "交联网络": ("交联结构",),
+    "层间强度": ("层间结合强度",),
+    "骨整合": ("骨结合",),
+    "成骨样细胞": ("成骨细胞样",),
+    "自修复涂层": ("自愈合涂层",),
+    "缓蚀剂": ("腐蚀抑制剂",),
+    "计算材料设计": ("材料计算设计",),
+    "第一性原理计算": ("第一性原理模拟",),
+    "相场模型": ("相场法模型",),
+    "grain boundary": ("grain boundaries", "grain-boundary", "grain-boundaries"),
+    "laser powder bed fusion": ("laser powder-bed fusion",),
+    "ceramic-matrix composite": ("ceramic matrix composite", "ceramic-matrix composites"),
+    "precipitation strengthening": ("precipitation hardening",),
+    "oxide semiconductor": ("oxide semi-conductor",),
+    "thin film": ("thin films",),
+    "alkali-activated binder": ("alkali activated binder", "alkali-activated binders"),
+    "silicon nitride ceramic": ("silicon-nitride ceramic", "silicon nitride ceramics"),
+    "lithium-ion battery": ("lithium ion battery", "lithium-ion batteries"),
+    "high-nickel layered oxide": ("high nickel layered oxide",),
+    "thermoset polymer": ("thermosetting polymer", "thermoset polymers"),
+    "self-healing coating": ("self healing coating", "self-healing coatings"),
+    "first-principles calculation": ("first principles calculation",),
+}
+
+
+def _normalise_term(term: object) -> str:
+    return re.sub(r"\s+", " ", str(term or "").strip())
+
+
+def _term_pattern(term: str) -> str:
+    """Build a boundary-aware pattern for Chinese or English terminology."""
+    term = _normalise_term(term)
+    if not term:
+        return r"(?!x)x"
+    if re.search(r"[\u4e00-\u9fff]", term) and not re.search(r"[A-Za-z]", term):
+        return re.escape(term)
+    pieces = [piece for piece in re.split(r"[\s-]+", term) if piece]
+    if len(pieces) == 1:
+        body = re.escape(pieces[0])
+    else:
+        body = r"[\s-]+".join(re.escape(piece) for piece in pieces)
+    return rf"(?<![A-Za-z]){body}(?![A-Za-z])"
+
+
+def _english_inflection_compatible(canonical: str, variant: str) -> bool:
+    """Avoid changing a source term's singular/plural form during cleanup."""
+    canonical_parts = [part for part in re.split(r"[\s-]+", canonical) if part]
+    variant_parts = [part for part in re.split(r"[\s-]+", variant) if part]
+    if len(canonical_parts) != len(variant_parts) or not canonical_parts:
+        return False
+    return canonical_parts[-1].lower().endswith("s") == variant_parts[-1].lower().endswith("s")
+
+
+def _canonical_output_for_variant(canonical: str, variant: str) -> str:
+    """Preserve a plural suffix while normalizing a hyphenated English term."""
+    if not re.search(r"[A-Za-z]", canonical):
+        return canonical
+    canonical_parts = [part for part in re.split(r"[\s-]+", canonical) if part]
+    variant_parts = [part for part in re.split(r"[\s-]+", variant) if part]
+    if len(canonical_parts) != len(variant_parts) or not canonical_parts:
+        return canonical
+    canonical_last = canonical_parts[-1]
+    variant_last = variant_parts[-1]
+    if not canonical_last.lower().endswith("s") and variant_last.lower().endswith("s"):
+        if canonical_last.lower().endswith("y"):
+            canonical_last = canonical_last[:-1] + "ies"
+        else:
+            canonical_last = canonical_last + "s"
+        canonical_parts[-1] = canonical_last
+        return " ".join(canonical_parts)
+    return canonical
+
+
+def _term_specs(term_hints: Optional[list[str]] = None) -> list[tuple[str, tuple[str, ...]]]:
+    """Merge built-in aliases with the material-specific terms for this clip."""
+    merged: dict[str, set[str]] = {}
+    for canonical, aliases in PROFESSIONAL_TERM_ALIASES.items():
+        canonical = _normalise_term(canonical)
+        if canonical:
+            merged.setdefault(canonical, set()).update(
+                alias for alias in (_normalise_term(value) for value in aliases) if alias
+            )
+    for hint in term_hints or []:
+        canonical = _normalise_term(hint)
+        if not canonical:
+            continue
+        aliases = merged.setdefault(canonical, set())
+        aliases.update(
+            variant for variant in (
+                canonical.replace("-", " "),
+                canonical.replace(" ", "-"),
+            ) if variant and variant != canonical
+        )
+    return [
+        (canonical, tuple(sorted(aliases, key=len, reverse=True)))
+        for canonical, aliases in merged.items()
+    ]
+
+
+def _remove_filler_words(text: str, language: str) -> tuple[str, list[str]]:
+    """Remove standalone hesitation sounds while leaving ordinary words intact."""
+    removed: list[str] = []
+    patterns = []
+    if language == "en":
+        patterns.append(re.compile(r"(?i)(?<![A-Za-z])(?:uh+|um+|erm+|er+|hmm+)(?![A-Za-z])"))
+    else:
+        # Repeated characters (嗯嗯、啊啊、呃嗯) are common ASR spellings. A
+        # single filler is also removed because SenseVoice often omits pauses.
+        patterns.append(re.compile(r"(?<![A-Za-z])(?:嗯+|呃+|额+|唔+|呣+|啊+|唉+)(?![A-Za-z])"))
+
+    def replace(match: re.Match) -> str:
+        removed.append(match.group(0))
+        return ""
+
+    for pattern in patterns:
+        text = pattern.sub(replace, text)
+    return text, removed
+
+
+def _normalise_professional_terms(
+    text: str,
+    term_hints: Optional[list[str]] = None,
+) -> tuple[str, list[dict], list[str]]:
+    corrections: list[dict] = []
+    specs = _term_specs(term_hints)
+    replacements: list[tuple[str, str]] = []
+    for canonical, aliases in specs:
+        for alias in aliases:
+            if re.search(r"[A-Za-z]", canonical) and not _english_inflection_compatible(canonical, alias):
+                # A plural hyphenated form can still be safely converted to
+                # spaces (e.g. grain-boundaries -> grain boundaries), while
+                # a true singular/plural synonym should be left untouched.
+                if _canonical_output_for_variant(canonical, alias) == alias:
+                    continue
+            replacements.append((alias, canonical))
+        # Also normalize English capitalization while keeping Chinese text
+        # unchanged. Exact canonical matches are naturally no-ops.
+        if re.search(r"[A-Za-z]", canonical):
+            replacements.append((canonical, canonical))
+    replacements.sort(key=lambda item: len(item[0]), reverse=True)
+
+    for variant, canonical in replacements:
+        pattern = re.compile(_term_pattern(variant), re.IGNORECASE if re.search(r"[A-Za-z]", variant) else 0)
+        replacement_target = _canonical_output_for_variant(canonical, variant)
+
+        def replace(
+            match: re.Match,
+            canonical: str = canonical,
+            replacement_target: str = replacement_target,
+        ) -> str:
+            original = match.group(0)
+            if original != replacement_target:
+                corrections.append({"from": original, "to": replacement_target, "_position": match.start()})
+            return replacement_target
+
+        text = pattern.sub(replace, text)
+
+    corrections.sort(key=lambda item: item.get("_position", 0))
+    for correction in corrections:
+        correction.pop("_position", None)
+    recognized: list[str] = []
+    for canonical, aliases in specs:
+        candidates = (canonical, *aliases)
+        for candidate in candidates:
+            flags = re.IGNORECASE if re.search(r"[A-Za-z]", candidate) else 0
+            if re.search(_term_pattern(candidate), text, flags):
+                if canonical not in recognized:
+                    recognized.append(canonical)
+                break
+    return text, corrections, recognized
+
+
+def clean_transcript(
+    text: str,
+    language: str = "zh",
+    term_hints: Optional[list[str]] = None,
+) -> dict:
+    """清理 ASR 文本并返回可审阅的处理元数据。
+
+    ``text`` 是接口返回的原始转写；``text`` 字段是提交给面试评价的清理后文本。
+    不会调用额外模型，因而不会增加录音后的等待时间。
+    """
+    raw_text = str(text or "").strip()
+    normalized_language = "en" if str(language).lower().startswith("en") else "zh"
+    without_fillers, fillers_removed = _remove_filler_words(raw_text, normalized_language)
+    normalized, term_corrections, recognized_terms = _normalise_professional_terms(
+        without_fillers,
+        term_hints=term_hints,
+    )
+    normalized = re.sub(r"\s+([，。！？、；：:,.!?;])", r"\1", normalized)
+    normalized = re.sub(r"([，。！？、；：:,.!?;]){2,}", r"\1", normalized)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized).strip(" \t，。！？、；：:,.!?;")
+    return {
+        "text": normalized,
+        "raw_text": raw_text,
+        "fillers_removed": fillers_removed,
+        "term_corrections": term_corrections,
+        "recognized_terms": recognized_terms,
+    }
+
+
+def build_stt_prompt(term_hints: Optional[list[str]] = None, language: str = "zh") -> str:
+    """为支持 prompt 的 OpenAI 兼容 STT 服务生成轻量术语上下文。"""
+    terms = []
+    for hint in term_hints or []:
+        value = _normalise_term(hint)
+        if value and value not in terms:
+            terms.append(value)
+    if not terms:
+        return ""
+    if str(language).lower().startswith("en"):
+        prefix = "Materials-science reading. Preserve these technical terms and their spelling: "
+    else:
+        prefix = "材料科学语音转写，请优先保留以下专业术语，不要将其改写成同音普通词："
+    return prefix + ", ".join(terms[:40])
 
 
 class VoiceCaptureError(ValueError):
@@ -225,13 +472,36 @@ def _log_audio_event(
         pass
 
 
+def _prompt_argument_unsupported(error: Exception) -> bool:
+    """判断兼容接口是否只是不接受可选的 prompt 参数。"""
+    message = str(error or "").lower()
+    return "prompt" in message and any(
+        marker in message
+        for marker in (
+            "unknown",
+            "unsupported",
+            "unexpected",
+            "invalid",
+            "extra",
+            "unrecognized",
+            "not allowed",
+        )
+    )
+
+
 def transcribe_audio(
     audio_bytes: bytes,
     filename: str = "answer.wav",
     client_stats: Optional[dict] = None,
     language: str = "zh",
-) -> str:
-    """将浏览器录音转成指定语言的文本。"""
+    term_hints: Optional[list[str]] = None,
+    return_metadata: bool = False,
+) -> Union[str, dict]:
+    """将浏览器录音转成指定语言的文本，并清理停顿词与材料术语。
+
+    默认返回清理后的字符串以兼容旧调用；设置 ``return_metadata=True``
+    时返回 ``clean_transcript`` 的完整结果，便于界面展示原始转写和处理摘要。
+    """
     if not audio_bytes:
         return ""
 
@@ -324,13 +594,29 @@ def transcribe_audio(
         ".ogg": "audio/ogg",
     }.get(suffix, "audio/wav")
 
+    request_kwargs = {
+        "model": model,
+        "file": (safe_filename, audio_bytes, mime_type),
+        "language": language,
+        "response_format": "json",
+    }
+    stt_prompt = build_stt_prompt(term_hints=term_hints, language=language)
+    if stt_prompt:
+        # OpenAI-compatible providers that support prompt can use this as a
+        # lightweight hotword hint. A compatibility fallback below keeps
+        # older SiliconFlow deployments working if they reject the field.
+        request_kwargs["prompt"] = stt_prompt
+
     try:
-        response = _get_client().audio.transcriptions.create(
-            model=model,
-            file=(safe_filename, audio_bytes, mime_type),
-            language=language,
-            response_format="json",
-        )
+        client = _get_client()
+        try:
+            response = client.audio.transcriptions.create(**request_kwargs)
+        except Exception as exc:
+            if "prompt" in request_kwargs and _prompt_argument_unsupported(exc):
+                request_kwargs.pop("prompt", None)
+                response = client.audio.transcriptions.create(**request_kwargs)
+            else:
+                raise
     except Exception:
         _log_audio_event(
             model=model,
@@ -343,7 +629,8 @@ def transcribe_audio(
     text = getattr(response, "text", "")
     if not text and isinstance(response, dict):
         text = response.get("text", "")
-    text = (text or "").strip()
+    cleaned = clean_transcript(text, language=language, term_hints=term_hints)
+    text = cleaned["text"]
 
     # 只记录耗时、大小和音量诊断，不记录录音内容。
     _log_audio_event(
@@ -355,4 +642,4 @@ def transcribe_audio(
         text_length=len(text),
     )
 
-    return text
+    return cleaned if return_metadata else text

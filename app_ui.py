@@ -44,6 +44,8 @@ DEFAULTS = {
     "voice_audio_hash": "",
     "voice_error_hash": "",
     "voice_transcript": "",
+    "voice_raw_transcript": "",
+    "voice_transcript_meta": {},
     "voice_last_spoken_id": "",
     "smart_import_processed_id": "",
     "lit_material": None,
@@ -55,9 +57,12 @@ DEFAULTS = {
     "lit_voice_audio_hash": "",
     "lit_voice_error_hash": "",
     "lit_voice_transcript": "",
+    "lit_voice_raw_transcript": "",
+    "lit_voice_transcript_meta": {},
     "lit_voice_duration": 0.0,
     "lit_voice_recorded": False,
     "lit_submitted_translation": "",
+    "lit_submitted_raw_translation": "",
     "lit_saved": False,
 }
 
@@ -82,6 +87,8 @@ if launch_mode == "literature_translation" and st.session_state.page == "profile
     st.session_state.lit_stage = "reading"
     st.session_state.lit_reading_result = None
     st.session_state.lit_translation_result = None
+    st.session_state.lit_submitted_translation = ""
+    st.session_state.lit_submitted_raw_translation = ""
     st.session_state.lit_deadline = 0.0
     st.session_state.lit_saved = False
     st.session_state.page = "interview"
@@ -173,7 +180,43 @@ def _clear_voice_state():
     st.session_state.voice_audio_hash = ""
     st.session_state.voice_error_hash = ""
     st.session_state.voice_transcript = ""
+    st.session_state.voice_raw_transcript = ""
+    st.session_state.voice_transcript_meta = {}
     # 不在本次运行中修改已渲染的 text_area widget 状态；下一次录音时会覆盖它。
+
+
+def _profile_voice_term_hints() -> list[str]:
+    """提取少量画像字段作为普通面试语音识别的术语提示。"""
+    profile = st.session_state.get("profile") or {}
+    hints: list[str] = []
+    for key in ("discipline", "target_major", "research_direction"):
+        value = str(profile.get(key) or "").strip()
+        if value and value not in hints:
+            hints.append(value)
+    return hints
+
+
+def _show_transcription_processing(metadata: Optional[dict], raw_label: str = "查看原始转写") -> None:
+    """在语音文本旁说明过滤和术语规范化结果，并允许核对原文。"""
+    if not isinstance(metadata, dict):
+        return
+    fillers = metadata.get("fillers_removed") or []
+    corrections = metadata.get("term_corrections") or []
+    recognized = metadata.get("recognized_terms") or []
+    summary: list[str] = []
+    if fillers:
+        summary.append(f"过滤 {len(fillers)} 个停顿词")
+    if corrections:
+        summary.append(f"规范化 {len(corrections)} 个专业词汇")
+    if summary:
+        st.info("🧹 " + " · ".join(summary) + "。以下文本可继续手动修改。")
+    if recognized:
+        st.caption("识别到的材料术语：" + "、".join(str(term) for term in recognized[:12]))
+    raw_text = str(metadata.get("raw_text") or "").strip()
+    cleaned_text = str(metadata.get("text") or "").strip()
+    if raw_text and raw_text != cleaned_text:
+        with st.expander(f"{raw_label}（未过滤）", expanded=False):
+            st.write(raw_text)
 
 
 def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
@@ -220,14 +263,23 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
                 st.warning("浏览器仍启用了部分回声/降噪处理；开放扬声器时请降低音量，或改用耳机。")
             try:
                 with st.spinner("🎧 正在识别语音..."):
-                    transcript = transcribe_audio(
+                    transcription = transcribe_audio(
                         audio_bytes,
                         recording.get("filename", "answer.webm"),
                         client_stats=recording,
+                        term_hints=_profile_voice_term_hints(),
+                        return_metadata=True,
                     )
+                metadata = transcription if isinstance(transcription, dict) else {
+                    "text": str(transcription or ""),
+                    "raw_text": str(transcription or ""),
+                }
+                transcript = str(metadata.get("text") or "")
                 st.session_state.voice_audio_hash = audio_hash
                 st.session_state.voice_error_hash = ""
                 st.session_state.voice_transcript = transcript
+                st.session_state.voice_raw_transcript = str(metadata.get("raw_text") or "")
+                st.session_state.voice_transcript_meta = metadata
                 st.session_state.voice_transcript_edit = transcript
                 newly_transcribed = True
                 if transcript:
@@ -243,14 +295,19 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
                 st.session_state.voice_audio_hash = ""
                 st.session_state.voice_error_hash = audio_hash
                 st.session_state.voice_transcript = ""
+                st.session_state.voice_raw_transcript = ""
+                st.session_state.voice_transcript_meta = {}
                 st.warning(f"⚠️ {exc}")
             except Exception as exc:
                 st.session_state.voice_audio_hash = audio_hash
                 st.session_state.voice_transcript = ""
+                st.session_state.voice_raw_transcript = ""
+                st.session_state.voice_transcript_meta = {}
                 st.error(f"语音识别失败：{exc}")
 
     transcript = st.session_state.get("voice_transcript", "")
     if transcript:
+        _show_transcription_processing(st.session_state.get("voice_transcript_meta"))
         transcript = st.text_area(
             "语音识别结果（可修改）",
             key="voice_transcript_edit",
@@ -259,7 +316,12 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
     return transcript.strip(), newly_transcribed
 
 
-def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) -> tuple[str, float]:
+def _capture_literature_voice(
+    language: str,
+    widget_key: str,
+    max_seconds: int,
+    term_hints: Optional[list[str]] = None,
+) -> tuple[str, float]:
     """为文献翻译环节录音并转写，和普通问答的语音状态完全隔离。"""
     st.caption(
         "请先在录音控件中选择环境：电脑扬声器外放选“电脑外放 / 开放麦克风”，"
@@ -292,15 +354,24 @@ def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) 
         ):
             try:
                 with st.spinner("🎧 正在识别英文朗读..." if language == "en" else "🎧 正在识别中文口译..."):
-                    transcript = transcribe_audio(
+                    transcription = transcribe_audio(
                         audio_bytes,
                         recording.get("filename", "answer.webm"),
                         client_stats=recording,
                         language=language,
+                        term_hints=term_hints,
+                        return_metadata=True,
                     )
+                metadata = transcription if isinstance(transcription, dict) else {
+                    "text": str(transcription or ""),
+                    "raw_text": str(transcription or ""),
+                }
+                transcript = str(metadata.get("text") or "")
                 st.session_state.lit_voice_audio_hash = audio_hash
                 st.session_state.lit_voice_error_hash = ""
                 st.session_state.lit_voice_transcript = transcript
+                st.session_state.lit_voice_raw_transcript = str(metadata.get("raw_text") or "")
+                st.session_state.lit_voice_transcript_meta = metadata
                 st.session_state.lit_voice_duration = recording.get("duration_seconds", 0.0)
                 edit_key = f"lit_{language}_transcript_edit"
                 st.session_state[edit_key] = transcript
@@ -314,13 +385,21 @@ def _capture_literature_voice(language: str, widget_key: str, max_seconds: int) 
                     )
             except VoiceCaptureError as exc:
                 st.session_state.lit_voice_error_hash = audio_hash
+                st.session_state.lit_voice_raw_transcript = ""
+                st.session_state.lit_voice_transcript_meta = {}
                 st.warning(str(exc))
             except Exception as exc:
                 st.session_state.lit_voice_audio_hash = audio_hash
+                st.session_state.lit_voice_raw_transcript = ""
+                st.session_state.lit_voice_transcript_meta = {}
                 st.error(f"语音识别失败：{exc}")
 
     transcript = st.session_state.get("lit_voice_transcript", "")
     if transcript or st.session_state.get("lit_voice_recorded", False):
+        _show_transcription_processing(
+            st.session_state.get("lit_voice_transcript_meta"),
+            raw_label="查看原始语音转写",
+        )
         edit_key = f"lit_{language}_transcript_edit"
         transcript = st.text_area(
             "英文朗读转写（可修改）" if language == "en" else "中文口译转写（可修改）",
@@ -339,6 +418,8 @@ def _reset_literature_voice() -> None:
     st.session_state.lit_voice_audio_hash = ""
     st.session_state.lit_voice_error_hash = ""
     st.session_state.lit_voice_transcript = ""
+    st.session_state.lit_voice_raw_transcript = ""
+    st.session_state.lit_voice_transcript_meta = {}
     st.session_state.lit_voice_duration = 0.0
     st.session_state.lit_voice_recorded = False
 
@@ -736,6 +817,7 @@ def render_mode_select_page():
         st.session_state.lit_reading_result = None
         st.session_state.lit_translation_result = None
         st.session_state.lit_submitted_translation = ""
+        st.session_state.lit_submitted_raw_translation = ""
         st.session_state.lit_deadline = 0.0
         st.session_state.lit_saved = False
         _reset_literature_voice()
@@ -768,7 +850,12 @@ def render_literature_translation():
         st.markdown(f"**{material['title']}**")
         st.write(material["text"])
         st.caption("建议朗读速度：每分钟约 100–160 词。")
-        transcript, duration = _capture_literature_voice("en", f"lit_reading_voice_{material['id']}", 600)
+        transcript, duration = _capture_literature_voice(
+            "en",
+            f"lit_reading_voice_{material['id']}",
+            600,
+            term_hints=[material.get("field", ""), *material.get("terms", [])],
+        )
         if transcript:
             if st.button("✅ 提交朗读并开始一分钟准备", type="primary", use_container_width=True):
                 checked = st.session_state.get("lit_en_transcript_edit", transcript).strip()
@@ -807,7 +894,12 @@ def render_literature_translation():
         st.info("请用中文连续口译原文，尽量保留因果、转折、比较和数据关系。录音结束后可修正识别文本，再提交评价。")
         with st.expander("查看英文材料", expanded=True):
             st.write(material["text"])
-        transcript, _ = _capture_literature_voice("zh", f"lit_translation_voice_{material['id']}", 600)
+        transcript, _ = _capture_literature_voice(
+            "zh",
+            f"lit_translation_voice_{material['id']}",
+            600,
+            term_hints=[material.get("field", ""), *material.get("terms", [])],
+        )
         if transcript:
             if st.button("📊 提交口译并获取评价", type="primary", use_container_width=True):
                 answer = st.session_state.get("lit_zh_transcript_edit", transcript).strip()
@@ -816,6 +908,10 @@ def render_literature_translation():
                 else:
                     with st.spinner("🤖 正在从材料学术角度评价口译..."):
                         st.session_state.lit_submitted_translation = answer
+                        metadata = st.session_state.get("lit_voice_transcript_meta") or {}
+                        st.session_state.lit_submitted_raw_translation = str(
+                            metadata.get("raw_text") or answer
+                        )
                         st.session_state.lit_translation_result = evaluate_translation(material, answer)
                     st.session_state.lit_stage = "result"
                     if not st.session_state.get("lit_saved", False):
@@ -859,6 +955,11 @@ def render_literature_translation():
         st.write(material["text"])
     with st.expander("🎙️ 我的中文口译", expanded=True):
         st.write(st.session_state.get("lit_submitted_translation", "") or "暂无口译记录")
+    raw_translation = st.session_state.get("lit_submitted_raw_translation", "")
+    cleaned_translation = st.session_state.get("lit_submitted_translation", "")
+    if raw_translation and raw_translation != cleaned_translation:
+        with st.expander("🧾 原始口译转写（未过滤）", expanded=False):
+            st.write(raw_translation)
     for title, key in (("✅ 口译优点", "strengths"), ("⚠️ 漏译与误译", "omissions"), ("🔬 术语反馈", "terminology_feedback"), ("🛠 改进建议", "suggestions")):
         values = result.get(key, [])
         if values:
@@ -877,6 +978,7 @@ def render_literature_translation():
         st.session_state.lit_reading_result = None
         st.session_state.lit_translation_result = None
         st.session_state.lit_submitted_translation = ""
+        st.session_state.lit_submitted_raw_translation = ""
         st.session_state.lit_saved = False
         _reset_literature_voice()
         st.rerun()
