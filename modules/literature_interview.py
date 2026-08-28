@@ -89,9 +89,21 @@ MATERIALS = (
 )
 
 
-def get_random_material(exclude_id: str = "") -> dict:
-    """返回一段原创、适合中等难度预推免翻译环节的材料。"""
-    candidates = [item for item in MATERIALS if item["id"] != exclude_id] or list(MATERIALS)
+def list_material_fields() -> list[str]:
+    """返回材料库中的方向，保持材料库定义顺序且去重。"""
+    return list(dict.fromkeys(item["field"] for item in MATERIALS))
+
+
+def get_random_material(exclude_id: str = "", field: str = "") -> dict:
+    """按方向随机返回一段原创、适合中等难度预推免翻译环节的材料。"""
+    candidates = [
+        item for item in MATERIALS
+        if (not field or item["field"] == field) and item["id"] != exclude_id
+    ]
+    if not candidates:
+        candidates = [item for item in MATERIALS if not field or item["field"] == field]
+    if not candidates:
+        candidates = list(MATERIALS)
     return dict(random.choice(candidates))
 
 

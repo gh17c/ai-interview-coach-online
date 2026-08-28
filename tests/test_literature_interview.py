@@ -20,6 +20,24 @@ class LiteratureInterviewTests(unittest.TestCase):
         material = get_random_material(MATERIALS[0]["id"])
         self.assertNotEqual(material["id"], MATERIALS[0]["id"])
 
+    def test_material_fields_are_unique_and_preserve_order(self):
+        from modules.literature_interview import MATERIALS, list_material_fields
+
+        fields = list_material_fields()
+        self.assertEqual(fields, list(dict.fromkeys(item["field"] for item in MATERIALS)))
+
+    def test_random_material_can_filter_by_field(self):
+        from modules.literature_interview import get_random_material
+
+        material = get_random_material(field="增材制造")
+        self.assertEqual(material["field"], "增材制造")
+
+    def test_unknown_field_falls_back_to_material_library(self):
+        from modules.literature_interview import MATERIALS, get_random_material
+
+        material = get_random_material(field="不存在的方向")
+        self.assertIn(material["id"], {item["id"] for item in MATERIALS})
+
     def test_reading_score_rewards_matching_text_and_reports_terms(self):
         from modules.literature_interview import MATERIALS, score_reading
 

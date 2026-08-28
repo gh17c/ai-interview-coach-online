@@ -30,7 +30,7 @@ from modules.evaluator import evaluate_answer, generate_full_report
 from modules.history import save_session, list_sessions, load_session, delete_session, log_pool_generation
 from modules.knowledge_base import get_random_insights
 from modules.voice import VoiceCaptureError, audio_recorder, transcribe_audio
-from modules.literature_interview import get_random_material, score_reading, evaluate_translation
+from modules.literature_interview import get_random_material, list_material_fields, score_reading, evaluate_translation
 
 
 st.set_page_config(page_title="AI 学术面试教练", page_icon="🎓", layout="wide")
@@ -47,6 +47,7 @@ DEFAULTS = {
     "voice_last_spoken_id": "",
     "smart_import_processed_id": "",
     "lit_material": None,
+    "lit_selected_field": "",
     "lit_stage": "reading",
     "lit_reading_result": None,
     "lit_translation_result": None,
@@ -56,6 +57,7 @@ DEFAULTS = {
     "lit_voice_transcript": "",
     "lit_voice_duration": 0.0,
     "lit_voice_recorded": False,
+    "lit_submitted_translation": "",
     "lit_saved": False,
 }
 
@@ -718,12 +720,22 @@ def render_mode_select_page():
     st.divider()
     st.markdown("### 📚 英文文献翻译面试")
     st.caption("模拟预推免常见的英文文献环节：朗读材料、准备一分钟、中文口译并获得专业评价。")
+    field_options = ["全部方向", *list_material_fields()]
+    selected_field_label = st.selectbox(
+        "选择材料方向",
+        field_options,
+        index=field_options.index(st.session_state.get("lit_selected_field") or "全部方向"),
+        key="lit_field_selector",
+        help="选择后将从对应方向的材料中随机抽取题目。",
+    )
+    st.session_state.lit_selected_field = "" if selected_field_label == "全部方向" else selected_field_label
     if st.button("📚 开始英文文献翻译面试", type="primary", use_container_width=True):
         st.session_state.mode = "literature_translation"
-        st.session_state.lit_material = get_random_material()
+        st.session_state.lit_material = get_random_material(field=st.session_state.lit_selected_field)
         st.session_state.lit_stage = "reading"
         st.session_state.lit_reading_result = None
         st.session_state.lit_translation_result = None
+        st.session_state.lit_submitted_translation = ""
         st.session_state.lit_deadline = 0.0
         st.session_state.lit_saved = False
         _reset_literature_voice()
@@ -803,6 +815,7 @@ def render_literature_translation():
                     st.warning("口译内容过短，请至少完成主要句子的翻译。")
                 else:
                     with st.spinner("🤖 正在从材料学术角度评价口译..."):
+                        st.session_state.lit_submitted_translation = answer
                         st.session_state.lit_translation_result = evaluate_translation(material, answer)
                     st.session_state.lit_stage = "result"
                     if not st.session_state.get("lit_saved", False):
@@ -842,6 +855,10 @@ def render_literature_translation():
     st.metric("📖 朗读完整度与流畅度", f"{reading.get('score', 0)}/100")
     if reading:
         st.caption(f"识别 {reading.get('recognized_words', 0)}/{reading.get('expected_words', 0)} 词 · 关键术语覆盖 {reading.get('term_score', 0)}% · 估算语速 {reading.get('words_per_minute', 0)} 词/分钟")
+    with st.expander("📖 本次英文原文", expanded=True):
+        st.write(material["text"])
+    with st.expander("🎙️ 我的中文口译", expanded=True):
+        st.write(st.session_state.get("lit_submitted_translation", "") or "暂无口译记录")
     for title, key in (("✅ 口译优点", "strengths"), ("⚠️ 漏译与误译", "omissions"), ("🔬 术语反馈", "terminology_feedback"), ("🛠 改进建议", "suggestions")):
         values = result.get(key, [])
         if values:
@@ -852,10 +869,14 @@ def render_literature_translation():
         with st.expander("参考译文"):
             st.write(result["reference_translation"])
     if st.button("🔄 再来一篇", type="primary", use_container_width=True):
-        st.session_state.lit_material = get_random_material(material["id"])
+        st.session_state.lit_material = get_random_material(
+            exclude_id=material["id"],
+            field=st.session_state.get("lit_selected_field", ""),
+        )
         st.session_state.lit_stage = "reading"
         st.session_state.lit_reading_result = None
         st.session_state.lit_translation_result = None
+        st.session_state.lit_submitted_translation = ""
         st.session_state.lit_saved = False
         _reset_literature_voice()
         st.rerun()
