@@ -95,6 +95,24 @@ class LiteratureInterviewTests(unittest.TestCase):
         self.assertGreater(len(material["text"].split()), 100)
         self.assertIn(material["title"], history)
 
+    def test_generate_material_supports_legacy_chat_without_max_tokens(self):
+        from modules.literature_interview import generate_material
+
+        payload = self._generated_payload("兼容旧版接口的电池研究")
+
+        # This mirrors api_client versions from before max_tokens was added.
+        def legacy_chat(system_prompt, user_message, temperature=0.7, model=None, response_format=None):
+            return {"content": json.dumps(payload)}
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "modules.literature_interview._MATERIAL_HISTORY_PATH",
+            Path(temp_dir) / "materials.jsonl",
+        ), patch("modules.literature_interview.chat", side_effect=legacy_chat):
+            material = generate_material(field="电池材料")
+
+        self.assertEqual(material["source"], "ai")
+        self.assertEqual(material["field"], "电池材料")
+
     def test_generate_material_rejects_duplicate_and_requests_a_new_article(self):
         from modules.literature_interview import generate_material
 

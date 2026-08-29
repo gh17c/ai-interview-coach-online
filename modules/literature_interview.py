@@ -351,6 +351,32 @@ def _response_format_unsupported(error: Exception) -> bool:
     )
 
 
+def _chat_generation_once(
+    system_prompt: str,
+    user_message: str,
+    selected_model: str,
+    use_json_mode: bool = True,
+) -> dict:
+    """Call ``chat`` across both old and new api_client signatures."""
+    kwargs = {
+        "temperature": 0.85,
+        "model": selected_model,
+        "max_tokens": 1100,
+    }
+    if use_json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    try:
+        return chat(system_prompt, user_message, **kwargs)
+    except TypeError as exc:
+        # Releases before the token-budget extension do not accept
+        # ``max_tokens``.  Retrying without only this optional argument keeps
+        # the literature feature usable with an older local api_client.
+        if "max_tokens" not in str(exc):
+            raise
+        kwargs.pop("max_tokens", None)
+        return chat(system_prompt, user_message, **kwargs)
+
+
 def _call_generation_model(system_prompt: str, user_message: str, model: Optional[str] = None) -> dict:
     """Call the configured chat model with short retries for provider outages."""
     selected_model = model or os.getenv("LITERATURE_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
@@ -359,26 +385,13 @@ def _call_generation_model(system_prompt: str, user_message: str, model: Optiona
     for attempt in range(retry_limit + 1):
         try:
             try:
-                return chat(
-                    system_prompt,
-                    user_message,
-                    temperature=0.85,
-                    model=selected_model,
-                    response_format={"type": "json_object"},
-                    max_tokens=1100,
-                )
+                return _chat_generation_once(system_prompt, user_message, selected_model, use_json_mode=True)
             except Exception as exc:
                 # Older OpenAI-compatible gateways may reject JSON mode while
                 # still returning ordinary text. Retry once without that
                 # optional parameter before treating the model as unavailable.
                 if _response_format_unsupported(exc):
-                    return chat(
-                        system_prompt,
-                        user_message,
-                        temperature=0.85,
-                        model=selected_model,
-                        max_tokens=1100,
-                    )
+                    return _chat_generation_once(system_prompt, user_message, selected_model, use_json_mode=False)
                 raise
         except Exception as exc:
             last_error = exc
