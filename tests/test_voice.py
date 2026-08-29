@@ -125,6 +125,33 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaisesRegex(VoiceCaptureError, "空文本"):
                 transcribe_audio(make_wav(amplitude=8000), "answer.wav")
 
+    def test_transcription_preserves_503_when_later_fallback_is_empty(self):
+        from modules.voice import VoiceCaptureError, transcribe_audio
+
+        class Temporary503Error(RuntimeError):
+            status_code = 503
+
+        def create(**kwargs):
+            if kwargs["model"] == "primary-asr":
+                return SimpleNamespace(text="")
+            raise Temporary503Error("service unavailable")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "0",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            with self.assertRaisesRegex(VoiceCaptureError, "503"):
+                transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
     def test_transcription_retries_temporary_503_then_succeeds(self):
         from modules.voice import transcribe_audio
 

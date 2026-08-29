@@ -743,6 +743,7 @@ def transcribe_audio(
     response = None
     used_model = model
     last_error: Optional[Exception] = None
+    last_transient_error: Optional[Exception] = None
     attempted_models: list[str] = []
     empty_models: list[str] = []
     try:
@@ -786,8 +787,11 @@ def transcribe_audio(
                 # caller receives the real configuration problem.
                 if not _is_retryable_transcription_error(exc):
                     raise
+                last_transient_error = exc
                 continue
         if response is None and last_error is not None:
+            if last_transient_error is not None and str(last_error).startswith("语音模型 "):
+                raise last_transient_error
             if empty_models and str(last_error).startswith("语音模型 "):
                 models_label = "、".join(empty_models)
                 raise EmptyTranscriptionError(
