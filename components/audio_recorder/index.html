@@ -667,6 +667,8 @@
               setStatus("麦克风权限被拒绝，请在浏览器地址栏左侧点🔒→麦克风→允许，然后刷新页面。", "error");
             } else if (name === "NotFoundError") {
               setStatus("没有找到麦克风，请检查系统输入设备连接。", "error");
+            } else if (error && String(error.message || "").includes("muted or inactive")) {
+              setStatus("检测到的麦克风没有音频信号。请在“输入设备”中选择实际麦克风，或检查 Windows 麦克风隐私权限后重试。", "error");
             } else {
               setStatus("无法打开麦克风（" + (name || "未知错误") + "），请使用 Chrome/Edge 重试。", "error");
             }
