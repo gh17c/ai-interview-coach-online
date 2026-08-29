@@ -344,12 +344,17 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
                 st.rerun()
 
     transcript = st.session_state.get("voice_transcript", "")
-    if transcript:
+    # Keep a manual-input escape hatch when the provider returned only filler
+    # words or a transient 503.  Without this, the error state would expose a
+    # retry button but no editable field, leaving ordinary interview mode
+    # unable to continue with a transcript the user types themselves.
+    if transcript or st.session_state.get("voice_error_hash", ""):
         _show_transcription_processing(st.session_state.get("voice_transcript_meta"))
         transcript = st.text_area(
             "语音识别结果（可修改）",
             key="voice_transcript_edit",
             height=110,
+            placeholder="识别失败时，也可以在这里手动输入回答后提交。",
         )
     return transcript.strip(), newly_transcribed
 
