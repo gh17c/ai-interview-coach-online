@@ -72,10 +72,11 @@ Windows 分享与安装说明见 [SHARING.md](SHARING.md)。运行 `build_share_
 
 语音识别默认使用硅基流动的 `Qwen/Qwen3-ASR-1.7B`，并按顺序备用
 `FunAudioLLM/SenseVoiceSmall`、`XingChenAGI/XingChenASR-V3.2`，不需要额外的 TTS Key。
-遇到临时的 503、502、504 或 429 时，系统会自动进行最多 3 次短间隔重试，随后切换备用模型；
+遇到临时的 503、502、504 或 429 时，系统会自动进行短间隔重试，随后切换备用模型；
 仍失败时会提示检查硅基流动控制台中的模型状态、额度和网络连接。可在 `.env` 中通过
-`SILICONFLOW_STT_MODEL`、`SILICONFLOW_STT_FALLBACK_MODELS`、`SILICONFLOW_STT_MAX_RETRIES` 和
-`SILICONFLOW_STT_TIMEOUT_SECONDS` 调整模型、重试次数和单次请求超时。单次请求默认最多等待 90 秒，
+`SILICONFLOW_STT_MODEL`、`SILICONFLOW_STT_FALLBACK_MODELS`、`SILICONFLOW_STT_MAX_RETRIES`、
+`SILICONFLOW_STT_TIMEOUT_SECONDS` 和 `SILICONFLOW_STT_TOTAL_TIMEOUT_SECONDS` 调整模型、重试次数、
+单次请求和整段录音的等待上限。默认单次最多等待 45 秒、整段录音最多等待 120 秒，
 避免硅基流动连接卡住时页面长时间无响应；10 分钟录音本身仍可完整录制。
 
 英文文献翻译环节在选择材料方向并点击开始后，会调用当前配置的聊天模型即时生成约 130–180 词的原创材料。

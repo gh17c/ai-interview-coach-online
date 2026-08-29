@@ -183,6 +183,24 @@ class LiteratureInterviewTests(unittest.TestCase):
         self.assertEqual(history[0]["id"], "history-0")
         self.assertEqual(history[-1]["id"], "history-124")
 
+    def test_material_history_read_failure_is_not_treated_as_empty(self):
+        from modules.literature_interview import MaterialHistoryError, _read_material_history
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "materials.jsonl"
+            history_path.write_text("{not valid json}\n", encoding="utf-8")
+            with self.assertRaises(MaterialHistoryError):
+                _read_material_history(path=history_path)
+
+    def test_material_history_directory_is_reported_as_read_failure(self):
+        from modules.literature_interview import MaterialHistoryError, _read_material_history
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "materials.jsonl"
+            history_path.mkdir()
+            with self.assertRaises(MaterialHistoryError):
+                _read_material_history(path=history_path)
+
     def test_material_generation_surfaces_history_write_failure(self):
         from modules.literature_interview import MaterialGenerationError, generate_material
 

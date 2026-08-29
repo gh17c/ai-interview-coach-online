@@ -27,6 +27,10 @@ class MaterialGenerationError(RuntimeError):
     """AI 文献生成失败且没有安全的不重复本地材料可用。"""
 
 
+class MaterialHistoryError(MaterialGenerationError):
+    """The persistent no-repeat history cannot be read safely."""
+
+
 class MaterialDuplicateError(ValueError):
     """A concurrent session reserved the same material first."""
 
@@ -282,21 +286,43 @@ def _material_history_lock(history_path: Path):
 
 
 def _read_material_history(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict]:
-    """Read prior generated materials, tolerating a missing/corrupt log."""
+    """Read prior generated materials without weakening the no-repeat promise.
+
+    A missing file is the normal first-run state.  Any other read or parse
+    failure is surfaced so callers do not mistake an inaccessible/corrupt log
+    for an empty history and accidentally reuse an article.
+    """
     history_path = Path(path or _MATERIAL_HISTORY_PATH)
     try:
         lines = history_path.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, OSError, UnicodeError):
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeError) as exc:
+        raise MaterialHistoryError(
+            f"无法读取文献去重记录：{history_path}。请确认 data 文件夹可读后重试。"
+        ) from exc
     records: list[dict] = []
-    selected_lines = lines if limit is None else lines[-max(1, int(limit)) :]
-    for line in selected_lines:
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
         try:
             record = json.loads(line)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if isinstance(record, dict) and (record.get("text") or record.get("fingerprint")):
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise MaterialHistoryError(
+                f"文献去重记录格式损坏（第 {line_number} 行）：{history_path}。"
+                "请备份后修复该文件，再重新启动应用。"
+            ) from exc
+        if not isinstance(record, dict):
+            raise MaterialHistoryError(
+                f"文献去重记录格式损坏（第 {line_number} 行）：{history_path}。"
+            )
+        if record.get("text") or record.get("fingerprint"):
             records.append(record)
+    if limit is not None:
+        try:
+            records = records[-max(1, int(limit)) :]
+        except (TypeError, ValueError) as exc:
+            raise MaterialHistoryError("文献去重记录读取参数无效。") from exc
     return records
 
 
@@ -642,6 +668,10 @@ def create_material(
     exclude_records = _as_material_records(exclude_materials)
     try:
         return generate_material(field=field, exclude_materials=exclude_records, model=model)
+    except MaterialHistoryError:
+        # Falling back to a bundled article would make an unreadable history
+        # look empty and could repeat content across sessions.
+        raise
     except MaterialGenerationError as generation_error:
         # Reserve a local item under the same lock used for AI articles.  If
         # another process wins the race between selection and append, exclude

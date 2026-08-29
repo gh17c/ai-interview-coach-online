@@ -76,6 +76,38 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result, "备用模型识别成功")
         self.assertEqual(calls, ["primary-asr", "fallback-asr"])
 
+    def test_transcription_switches_to_fallback_when_primary_model_is_missing(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        class MissingModelError(RuntimeError):
+            status_code = 404
+
+        def create(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "primary-asr":
+                raise MissingModelError("model not found")
+            return SimpleNamespace(text="模型切换成功")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "3",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+        self.assertEqual(result, "模型切换成功")
+        self.assertEqual(calls, ["primary-asr", "fallback-asr"])
+
     def test_transcription_switches_model_when_primary_returns_empty_text(self):
         from modules.voice import transcribe_audio
 
@@ -84,6 +116,34 @@ class VoiceTests(unittest.TestCase):
         def create(**kwargs):
             calls.append(kwargs["model"])
             text = "" if kwargs["model"] == "primary-asr" else "备用模型识别成功"
+            return SimpleNamespace(text=text)
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "0",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+        self.assertEqual(result, "备用模型识别成功")
+        self.assertEqual(calls, ["primary-asr", "fallback-asr"])
+
+    def test_transcription_switches_model_when_primary_returns_only_fillers(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs["model"])
+            text = "嗯嗯啊" if kwargs["model"] == "primary-asr" else "备用模型识别成功"
             return SimpleNamespace(text=text)
 
         fake_client = SimpleNamespace(
@@ -152,6 +212,34 @@ class VoiceTests(unittest.TestCase):
             with self.assertRaisesRegex(VoiceCaptureError, "503"):
                 transcribe_audio(make_wav(amplitude=8000), "answer.wav")
 
+    def test_transcription_preserves_503_when_primary_fails_and_fallback_is_empty(self):
+        """A later empty response must not hide the provider outage."""
+        from modules.voice import VoiceCaptureError, transcribe_audio
+
+        class Temporary503Error(RuntimeError):
+            status_code = 503
+
+        def create(**kwargs):
+            if kwargs["model"] == "primary-asr":
+                raise Temporary503Error("service unavailable")
+            return SimpleNamespace(text="")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "0",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            with self.assertRaisesRegex(VoiceCaptureError, "503"):
+                transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
     def test_transcription_retries_temporary_503_then_succeeds(self):
         from modules.voice import transcribe_audio
 
@@ -177,6 +265,41 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result, "恢复后的语音")
         self.assertEqual(calls["count"], 3)
         self.assertEqual(sleep.call_count, 2)
+
+    def test_transcription_raises_when_cleanup_removes_all_text(self):
+        """Filler-only ASR output must expose a retry path instead of success."""
+        from modules.voice import EmptyTranscriptionError, transcribe_audio
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(text="嗯嗯啊"))
+            )
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            with self.assertRaisesRegex(EmptyTranscriptionError, "停顿词"):
+                transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+    def test_transcription_total_deadline_is_checked_before_call(self):
+        from modules.voice import TranscriptionDeadlineExceeded, _create_transcription_with_retry
+
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(text="不应被调用")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with self.assertRaisesRegex(TranscriptionDeadlineExceeded, "总时限"):
+            _create_transcription_with_retry(
+                fake_client,
+                {"model": "primary-asr", "file": ("answer.wav", b"audio", "audio/wav")},
+                deadline=0.0,
+            )
+        self.assertEqual(calls, [])
 
     def test_transcription_reports_clear_error_after_503_retries(self):
         from modules.voice import VoiceCaptureError, transcribe_audio

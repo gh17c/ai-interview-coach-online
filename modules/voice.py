@@ -289,6 +289,10 @@ class EmptyTranscriptionError(VoiceCaptureError):
     """The provider responded successfully but returned no transcript."""
 
 
+class TranscriptionDeadlineExceeded(VoiceCaptureError):
+    """The complete failover/retry budget was exhausted."""
+
+
 def _pcm_signal_levels(frames: bytes, sample_width: int) -> tuple[float, float]:
     """Return RMS and peak for little-endian PCM without the removed audioop API."""
     if sample_width == 1:
@@ -532,6 +536,32 @@ def _is_retryable_transcription_error(error: Exception) -> bool:
     }
 
 
+def _is_model_unavailable_error(error: Exception) -> bool:
+    """Return True when a provider rejects only the selected model.
+
+    SiliconFlow commonly uses HTTP 404 for a model that is not enabled for an
+    account.  Some gateway versions use HTTP 400 with a matching message.
+    Those errors should skip to the next configured ASR model, but must not be
+    retried repeatedly against the same unavailable model.
+    """
+    status_code = _error_status_code(error)
+    if status_code == 404:
+        return True
+    if status_code != 400:
+        return False
+    message = str(error or "").lower()
+    return any(
+        marker in message
+        for marker in (
+            "model",
+            "not found",
+            "不存在",
+            "unavailable",
+            "unsupported",
+        )
+    )
+
+
 def _stt_retry_limit() -> int:
     try:
         return max(0, min(4, int(os.getenv("SILICONFLOW_STT_MAX_RETRIES", "3"))))
@@ -552,6 +582,24 @@ def _stt_timeout_seconds() -> float:
         return max(10.0, min(180.0, float(os.getenv("SILICONFLOW_STT_TIMEOUT_SECONDS", "90"))))
     except (TypeError, ValueError):
         return 90.0
+
+
+def _stt_total_timeout_seconds() -> float:
+    """Return the maximum wall-clock budget for one recording transcription.
+
+    The per-request timeout alone is not enough when several models and
+    retries are configured: a primary model can consume its whole timeout,
+    then every fallback can do the same.  A single deadline keeps the
+    Streamlit interaction responsive while still leaving enough time for a
+    long (up to ten-minute) recording to be processed by SiliconFlow.
+    """
+    try:
+        return max(
+            30.0,
+            min(600.0, float(os.getenv("SILICONFLOW_STT_TOTAL_TIMEOUT_SECONDS", "120"))),
+        )
+    except (TypeError, ValueError):
+        return 120.0
 
 
 def _stt_model_candidates(primary_model: Optional[str] = None) -> list[str]:
@@ -580,15 +628,39 @@ def _stt_model_candidates(primary_model: Optional[str] = None) -> list[str]:
     return candidates or [DEFAULT_STT_MODEL]
 
 
-def _create_transcription_with_retry(client, request_kwargs: dict):
+def _create_transcription_with_retry(
+    client,
+    request_kwargs: dict,
+    deadline: Optional[float] = None,
+):
     """Call the STT endpoint with bounded retry/backoff for transient errors."""
     retry_limit = _stt_retry_limit()
     timeout_seconds = _stt_timeout_seconds()
     last_error = None
+
+    def check_deadline() -> float:
+        if deadline is None:
+            return float("inf")
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise TranscriptionDeadlineExceeded(
+                "语音识别总时限已到（默认 120 秒）。请点击“重试此录音”；"
+                "若录音很长，可在 .env 中调高 SILICONFLOW_STT_TOTAL_TIMEOUT_SECONDS。"
+            )
+        return remaining
+
     for attempt in range(retry_limit + 1):
+        remaining = check_deadline()
         try:
             timed_kwargs = dict(request_kwargs)
-            timed_kwargs.setdefault("timeout", timeout_seconds)
+            # Never give one attempt more time than the remaining total
+            # budget.  A small lower bound avoids passing a zero timeout to
+            # clients that reject it, while the deadline check above stops
+            # subsequent attempts once the budget is exhausted.
+            attempt_timeout = timeout_seconds
+            if deadline is not None:
+                attempt_timeout = min(timeout_seconds, max(0.5, remaining))
+            timed_kwargs.setdefault("timeout", attempt_timeout)
             try:
                 return client.audio.transcriptions.create(**timed_kwargs)
             except TypeError as exc:
@@ -609,7 +681,13 @@ def _create_transcription_with_retry(client, request_kwargs: dict):
                 raise
             # Keep waits short enough for an interactive interview while
             # avoiding a burst against a temporarily unavailable endpoint.
-            delay = min(4.0, 0.6 * (2 ** attempt))
+            remaining = check_deadline()
+            delay = min(4.0, 0.6 * (2 ** attempt), max(0.0, remaining))
+            if delay <= 0:
+                raise TranscriptionDeadlineExceeded(
+                    "语音识别总时限已到（默认 120 秒）。请点击“重试此录音”；"
+                    "若录音很长，可在 .env 中调高 SILICONFLOW_STT_TOTAL_TIMEOUT_SECONDS。"
+                ) from exc
             time.sleep(delay)
     raise last_error
 
@@ -639,6 +717,7 @@ def transcribe_audio(
         return ""
 
     started = time.perf_counter()
+    total_deadline = started + _stt_total_timeout_seconds()
     safe_filename = Path(filename or "answer.wav").name
     if not safe_filename.lower().endswith((".wav", ".mp3", ".m4a", ".webm", ".mp4", ".ogg")):
         safe_filename = "answer.wav"
@@ -744,24 +823,41 @@ def transcribe_audio(
     used_model = model
     last_error: Optional[Exception] = None
     last_transient_error: Optional[Exception] = None
+    last_model_unavailable_error: Optional[Exception] = None
     attempted_models: list[str] = []
     empty_models: list[str] = []
+    filler_models: list[str] = []
     try:
         client = _get_client()
         for candidate_model in model_candidates:
+            # Check once before each model so a fallback cannot start after
+            # the recording's total interactive budget has already expired.
+            if time.perf_counter() >= total_deadline:
+                raise TranscriptionDeadlineExceeded(
+                    "语音识别总时限已到（默认 120 秒）。请点击“重试此录音”；"
+                    "若录音很长，可在 .env 中调高 SILICONFLOW_STT_TOTAL_TIMEOUT_SECONDS。"
+                )
             attempted_models.append(candidate_model)
             candidate_kwargs = dict(request_kwargs)
             candidate_kwargs["model"] = candidate_model
             try:
                 try:
-                    response = _create_transcription_with_retry(client, candidate_kwargs)
+                    response = _create_transcription_with_retry(
+                        client,
+                        candidate_kwargs,
+                        deadline=total_deadline,
+                    )
                 except Exception as exc:
                     # Some OpenAI-compatible gateways reject the optional
                     # prompt field.  Retry this same model once without the
                     # hint before considering it unavailable.
                     if "prompt" in candidate_kwargs and _prompt_argument_unsupported(exc):
                         candidate_kwargs.pop("prompt", None)
-                        response = _create_transcription_with_retry(client, candidate_kwargs)
+                        response = _create_transcription_with_retry(
+                            client,
+                            candidate_kwargs,
+                            deadline=total_deadline,
+                        )
                     else:
                         raise
                 candidate_response = response
@@ -770,14 +866,24 @@ def transcribe_audio(
                 # common failure mode for an overloaded/incorrectly routed
                 # ASR worker.  Give the next configured model a chance instead
                 # of returning an empty transcript immediately.
-                if response_text:
+                # Treat a response made only of filler sounds the same way;
+                # otherwise a primary 503 followed by a fallback “嗯嗯” would
+                # hide the outage and prevent the remaining models from trying.
+                candidate_cleaned_text = clean_transcript(
+                    response_text,
+                    language=language,
+                    term_hints=term_hints,
+                )["text"]
+                if candidate_cleaned_text:
                     response = candidate_response
                     used_model = candidate_model
                     break
                 response = None
                 used_model = candidate_model
                 empty_models.append(candidate_model)
-                last_error = RuntimeError(f"语音模型 {candidate_model} 返回空文本")
+                if response_text:
+                    filler_models.append(candidate_model)
+                last_error = RuntimeError(f"语音模型 {candidate_model} 返回空文本或仅含停顿词")
                 continue
             except Exception as exc:
                 last_error = exc
@@ -785,21 +891,30 @@ def transcribe_audio(
                 # A fallback model is useful only for transient provider
                 # failures.  Preserve validation/authentication errors so the
                 # caller receives the real configuration problem.
+                if _is_model_unavailable_error(exc):
+                    last_model_unavailable_error = exc
+                    continue
                 if not _is_retryable_transcription_error(exc):
                     raise
                 last_transient_error = exc
                 continue
-        if response is None and last_error is not None:
-            if last_transient_error is not None and str(last_error).startswith("语音模型 "):
+        if response is None:
+            # A provider outage is more actionable than an empty response from
+            # a later fallback.  Keep the last transient exception as the
+            # primary cause regardless of the order in which models failed.
+            if last_transient_error is not None:
                 raise last_transient_error
-            if empty_models and str(last_error).startswith("语音模型 "):
+            if last_model_unavailable_error is not None:
+                raise last_model_unavailable_error
+            if empty_models:
                 models_label = "、".join(empty_models)
+                response_kind = "空文本或仅含停顿词" if filler_models else "空文本"
                 raise EmptyTranscriptionError(
-                    f"语音识别服务返回空文本（已尝试：{models_label}）。"
+                    f"语音识别服务返回{response_kind}（已尝试：{models_label}）。"
                     "请确认录音音量条有变化，或点击“重试此录音”再试一次。"
                 )
-            raise last_error
-        if response is None:
+            if last_error is not None:
+                raise last_error
             raise RuntimeError("语音识别没有返回响应")
     except Exception as exc:
         _log_audio_event(
@@ -812,6 +927,13 @@ def transcribe_audio(
             error_type="EmptyTranscription" if isinstance(exc, EmptyTranscriptionError) else type(exc).__name__,
         )
         status_code = _error_status_code(exc)
+        if _is_model_unavailable_error(exc):
+            models_label = "、".join(attempted_models) or model
+            raise VoiceCaptureError(
+                f"配置的语音模型不可用（HTTP {status_code}）。已尝试：{models_label}。"
+                "请在硅基流动控制台确认模型权限，或在 .env 中更换"
+                " SILICONFLOW_STT_MODEL / SILICONFLOW_STT_FALLBACK_MODELS。"
+            ) from exc
         if status_code in {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}:
             models_label = "、".join(attempted_models) or model
             raise VoiceCaptureError(
@@ -833,5 +955,15 @@ def transcribe_audio(
         status="ok" if text else "empty_text",
         text_length=len(text),
     )
+
+    if not text:
+        # ASR can return a non-empty string consisting solely of hesitation
+        # sounds (e.g. “嗯嗯” or “uh”).  Treat the cleaned-empty result as an
+        # error so the UI exposes its existing retry/manual-input path instead
+        # of marking the clip as successfully processed.
+        raise EmptyTranscriptionError(
+            "语音识别结果只有停顿词或为空，无法提交。请重新录音；"
+            "也可以直接在识别结果框中手动输入内容。"
+        )
 
     return cleaned if return_metadata else text
