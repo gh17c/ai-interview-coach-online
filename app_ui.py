@@ -33,7 +33,6 @@ from modules.voice import VoiceCaptureError, audio_recorder, transcribe_audio
 from modules.literature_interview import (
     MaterialGenerationError,
     create_material,
-    get_random_material,
     list_material_fields,
     material_fingerprint,
     score_reading,
@@ -93,24 +92,34 @@ try:
 except Exception:
     launch_mode = ""
 if launch_mode == "literature_translation" and st.session_state.page == "profile":
-    st.session_state.mode = "literature_translation"
+    launch_material = None
+    launch_error = ""
     try:
-        st.session_state.lit_material = create_material()
-    except MaterialGenerationError:
-        # A desktop shortcut has no direction selector.  Keep it usable when
-        # the provider is briefly unavailable by using an unseen bundled item.
-        st.session_state.lit_material = get_random_material()
-    st.session_state.lit_used_materials = [st.session_state.lit_material]
-    st.session_state.lit_material_source = st.session_state.lit_material.get("source", "library")
-    st.session_state.lit_generation_error = str(st.session_state.lit_material.get("generation_error") or "")
-    st.session_state.lit_stage = "reading"
-    st.session_state.lit_reading_result = None
-    st.session_state.lit_translation_result = None
-    st.session_state.lit_submitted_translation = ""
-    st.session_state.lit_submitted_raw_translation = ""
-    st.session_state.lit_deadline = 0.0
-    st.session_state.lit_saved = False
-    st.session_state.page = "interview"
+        launch_material = create_material()
+    except MaterialGenerationError as exc:
+        # create_material already records a local fallback when it is safe.
+        # If it raises here, persistence or the complete no-repeat pool is
+        # unavailable; do not silently recycle an old article.
+        launch_error = str(exc)
+    if launch_material:
+        st.session_state.mode = "literature_translation"
+        st.session_state.lit_material = launch_material
+        st.session_state.lit_used_materials = [launch_material]
+        st.session_state.lit_material_source = launch_material.get("source", "library")
+        st.session_state.lit_generation_error = str(launch_material.get("generation_error") or "")
+        st.session_state.lit_stage = "reading"
+        st.session_state.lit_reading_result = None
+        st.session_state.lit_translation_result = None
+        st.session_state.lit_submitted_translation = ""
+        st.session_state.lit_submitted_raw_translation = ""
+        st.session_state.lit_deadline = 0.0
+        st.session_state.lit_saved = False
+        st.session_state.page = "interview"
+    else:
+        st.session_state.mode = None
+        st.session_state.lit_material = None
+        st.session_state.lit_generation_error = launch_error or "AI 文献暂时不可用，且没有未使用的本地材料。"
+        st.session_state.page = "profile"
 
 
 with st.sidebar:
@@ -318,11 +327,21 @@ def _capture_voice_transcript(widget_key: str) -> tuple[str, bool]:
                 st.session_state.voice_transcript_meta = {}
                 st.warning(f"⚠️ {exc}")
             except Exception as exc:
-                st.session_state.voice_audio_hash = audio_hash
+                st.session_state.voice_audio_hash = ""
+                st.session_state.voice_error_hash = audio_hash
                 st.session_state.voice_transcript = ""
                 st.session_state.voice_raw_transcript = ""
                 st.session_state.voice_transcript_meta = {}
                 st.error(f"语音识别失败：{exc}")
+
+        if audio_hash == st.session_state.get("voice_error_hash", ""):
+            if st.button(
+                "🔁 重试此录音",
+                key=f"{widget_key}_retry_transcription",
+                help="503、网关超时等临时错误可以直接重试，无需重新录音。",
+            ):
+                st.session_state.voice_error_hash = ""
+                st.rerun()
 
     transcript = st.session_state.get("voice_transcript", "")
     if transcript:
@@ -403,15 +422,26 @@ def _capture_literature_voice(
                         "也可以先在下方手动填写内容后提交。"
                     )
             except VoiceCaptureError as exc:
+                st.session_state.lit_voice_audio_hash = ""
                 st.session_state.lit_voice_error_hash = audio_hash
                 st.session_state.lit_voice_raw_transcript = ""
                 st.session_state.lit_voice_transcript_meta = {}
                 st.warning(str(exc))
             except Exception as exc:
-                st.session_state.lit_voice_audio_hash = audio_hash
+                st.session_state.lit_voice_audio_hash = ""
+                st.session_state.lit_voice_error_hash = audio_hash
                 st.session_state.lit_voice_raw_transcript = ""
                 st.session_state.lit_voice_transcript_meta = {}
                 st.error(f"语音识别失败：{exc}")
+
+        if audio_hash == st.session_state.get("lit_voice_error_hash", ""):
+            if st.button(
+                "🔁 重试此录音",
+                key=f"{widget_key}_retry_transcription",
+                help="503、网关超时等临时错误可以直接重试，无需重新录音。",
+            ):
+                st.session_state.lit_voice_error_hash = ""
+                st.rerun()
 
     transcript = st.session_state.get("lit_voice_transcript", "")
     if transcript or st.session_state.get("lit_voice_recorded", False):
@@ -565,6 +595,12 @@ def _render_latest_speech(text_override: str = ""):
 
 def render_profile_page():
     st.title("📋 构建你的面试画像")
+    if st.session_state.get("lit_generation_error"):
+        st.warning(
+            "文献翻译快捷入口暂时无法开始："
+            f"{st.session_state.lit_generation_error}。"
+            "填写画像后可从模式选择页重试。"
+        )
 
     # 初始化 step 状态
     if "profile_step" not in st.session_state:
@@ -884,7 +920,22 @@ def render_mode_select_page():
 
 
 def render_literature_translation():
-    material = st.session_state.get("lit_material") or get_random_material()
+    material = st.session_state.get("lit_material")
+    if not isinstance(material, dict):
+        # The normal entry points create the article before switching pages.
+        # If a stale browser session reaches this page without one, go through
+        # the same AI + persistent de-duplication path instead of silently
+        # recycling a bundled article.
+        try:
+            with st.spinner("🤖 正在恢复一篇不重复的英文文献…"):
+                material = _create_literature_material(
+                    st.session_state.get("lit_selected_field", "")
+                )
+        except MaterialGenerationError as exc:
+            st.error(str(exc))
+            st.session_state.page = "mode_select" if st.session_state.get("question_pool") else "profile"
+            st.session_state.mode = None
+            return
     st.session_state.lit_material = material
     stage = st.session_state.get("lit_stage", "reading")
     if st.button("← 返回模式选择", key="lit_back_mode"):

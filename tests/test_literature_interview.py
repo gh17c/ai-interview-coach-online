@@ -159,6 +159,58 @@ class LiteratureInterviewTests(unittest.TestCase):
             with self.assertRaises(MaterialGenerationError):
                 create_material(field="电池材料", exclude_materials=[first])
 
+    def test_material_history_is_not_truncated_after_many_sessions(self):
+        from modules.literature_interview import _read_material_history, _record_material
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "materials.jsonl"
+            for index in range(125):
+                _record_material(
+                    {
+                        "id": f"history-{index}",
+                        "title": f"History article {index}",
+                        "field": "电池材料",
+                        "text": f"A unique materials article with identifier {index} "
+                        + "and enough content for persistence testing.",
+                        "source": "ai",
+                    },
+                    path=history_path,
+                )
+
+            history = _read_material_history(path=history_path)
+
+        self.assertEqual(len(history), 125)
+        self.assertEqual(history[0]["id"], "history-0")
+        self.assertEqual(history[-1]["id"], "history-124")
+
+    def test_material_generation_surfaces_history_write_failure(self):
+        from modules.literature_interview import MaterialGenerationError, generate_material
+
+        with patch(
+            "modules.literature_interview.chat",
+            return_value={"content": json.dumps(self._generated_payload("不可写记录测试"))},
+        ), patch("modules.literature_interview._record_material", return_value=False):
+            with self.assertRaises(MaterialGenerationError):
+                generate_material(field="电池材料")
+
+    def test_fallback_reselects_when_another_session_reserved_item(self):
+        from modules.literature_interview import (
+            MaterialDuplicateError,
+            create_material,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "modules.literature_interview._MATERIAL_HISTORY_PATH",
+            Path(temp_dir) / "materials.jsonl",
+        ), patch("modules.literature_interview.chat", side_effect=RuntimeError("offline")), patch(
+            "modules.literature_interview._record_material",
+            side_effect=[MaterialDuplicateError("race"), True],
+        ) as record:
+            material = create_material()
+
+        self.assertEqual(material["source"], "local-fallback")
+        self.assertEqual(record.call_count, 2)
+
     def test_each_material_has_sufficient_translation_content(self):
         from modules.literature_interview import MATERIALS
 

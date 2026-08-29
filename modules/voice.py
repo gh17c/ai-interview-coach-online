@@ -2,7 +2,7 @@
 语音能力
 ========
 使用浏览器录音，再通过当前配置的 OpenAI 兼容接口进行语音转文字。
-默认模型为硅基流动的 SenseVoiceSmall；面试官语音播报由浏览器 SpeechSynthesis 完成，
+默认模型为硅基流动的 Qwen3-ASR-1.7B；面试官语音播报由浏览器 SpeechSynthesis 完成，
 因此不需要额外的 TTS API Key。
 """
 
@@ -22,7 +22,7 @@ from typing import Optional, Union
 from modules.api_client import _get_client
 
 
-DEFAULT_STT_MODEL = "FunAudioLLM/SenseVoiceSmall"
+DEFAULT_STT_MODEL = "Qwen/Qwen3-ASR-1.7B"
 # SiliconFlow occasionally returns an empty HTTP 503 while a speech model is
 # being moved between inference workers.  Keep the original model as the
 # first choice for compatibility, but allow a second model to take over in
@@ -285,6 +285,10 @@ class VoiceCaptureError(ValueError):
     """The recording cannot be usefully sent to speech recognition."""
 
 
+class EmptyTranscriptionError(VoiceCaptureError):
+    """The provider responded successfully but returned no transcript."""
+
+
 def _pcm_signal_levels(frames: bytes, sample_width: int) -> tuple[float, float]:
     """Return RMS and peak for little-endian PCM without the removed audioop API."""
     if sample_width == 1:
@@ -535,6 +539,21 @@ def _stt_retry_limit() -> int:
         return 3
 
 
+def _stt_timeout_seconds() -> float:
+    """Return a bounded per-request timeout for the interactive STT call.
+
+    The OpenAI client default is several minutes.  That is a poor fit for a
+    Streamlit interaction: a stalled 503/connection can otherwise leave the
+    page spinning for 10+ minutes before the retry/failover code gets a chance
+    to run.  Keep the value configurable for longer recordings, but never
+    allow an accidental zero or an unbounded value.
+    """
+    try:
+        return max(10.0, min(180.0, float(os.getenv("SILICONFLOW_STT_TIMEOUT_SECONDS", "90"))))
+    except (TypeError, ValueError):
+        return 90.0
+
+
 def _stt_model_candidates(primary_model: Optional[str] = None) -> list[str]:
     """Return the primary STT model followed by unique configured fallbacks.
 
@@ -564,10 +583,26 @@ def _stt_model_candidates(primary_model: Optional[str] = None) -> list[str]:
 def _create_transcription_with_retry(client, request_kwargs: dict):
     """Call the STT endpoint with bounded retry/backoff for transient errors."""
     retry_limit = _stt_retry_limit()
+    timeout_seconds = _stt_timeout_seconds()
     last_error = None
     for attempt in range(retry_limit + 1):
         try:
-            return client.audio.transcriptions.create(**request_kwargs)
+            timed_kwargs = dict(request_kwargs)
+            timed_kwargs.setdefault("timeout", timeout_seconds)
+            try:
+                return client.audio.transcriptions.create(**timed_kwargs)
+            except TypeError as exc:
+                # Very old OpenAI-compatible client wrappers may not expose
+                # the per-call timeout keyword.  Retain compatibility for
+                # those wrappers; current OpenAI clients always take the
+                # bounded path above.
+                message = str(exc or "").lower()
+                if "timeout" not in message or not any(
+                    marker in message
+                    for marker in ("unexpected", "unknown", "unsupported", "invalid", "keyword")
+                ):
+                    raise
+                return client.audio.transcriptions.create(**request_kwargs)
         except Exception as exc:
             last_error = exc
             if not _is_retryable_transcription_error(exc) or attempt >= retry_limit:
@@ -577,6 +612,14 @@ def _create_transcription_with_retry(client, request_kwargs: dict):
             delay = min(4.0, 0.6 * (2 ** attempt))
             time.sleep(delay)
     raise last_error
+
+
+def _transcription_text(response: object) -> str:
+    """Extract text from SDK objects and dict responses consistently."""
+    text = getattr(response, "text", "")
+    if not text and isinstance(response, dict):
+        text = response.get("text", "")
+    return str(text or "").strip()
 
 
 def transcribe_audio(
@@ -701,6 +744,7 @@ def transcribe_audio(
     used_model = model
     last_error: Optional[Exception] = None
     attempted_models: list[str] = []
+    empty_models: list[str] = []
     try:
         client = _get_client()
         for candidate_model in model_candidates:
@@ -719,10 +763,24 @@ def transcribe_audio(
                         response = _create_transcription_with_retry(client, candidate_kwargs)
                     else:
                         raise
+                candidate_response = response
+                response_text = _transcription_text(candidate_response)
+                # A successful HTTP response with an empty ``text`` is a
+                # common failure mode for an overloaded/incorrectly routed
+                # ASR worker.  Give the next configured model a chance instead
+                # of returning an empty transcript immediately.
+                if response_text:
+                    response = candidate_response
+                    used_model = candidate_model
+                    break
+                response = None
                 used_model = candidate_model
-                break
+                empty_models.append(candidate_model)
+                last_error = RuntimeError(f"语音模型 {candidate_model} 返回空文本")
+                continue
             except Exception as exc:
                 last_error = exc
+                response = None
                 # A fallback model is useful only for transient provider
                 # failures.  Preserve validation/authentication errors so the
                 # caller receives the real configuration problem.
@@ -730,6 +788,12 @@ def transcribe_audio(
                     raise
                 continue
         if response is None and last_error is not None:
+            if empty_models and str(last_error).startswith("语音模型 "):
+                models_label = "、".join(empty_models)
+                raise EmptyTranscriptionError(
+                    f"语音识别服务返回空文本（已尝试：{models_label}）。"
+                    "请确认录音音量条有变化，或点击“重试此录音”再试一次。"
+                )
             raise last_error
         if response is None:
             raise RuntimeError("语音识别没有返回响应")
@@ -739,9 +803,9 @@ def transcribe_audio(
             audio_bytes=audio_bytes,
             stats=stats,
             started=started,
-            status="api_error",
+            status="empty_text" if isinstance(exc, EmptyTranscriptionError) else "api_error",
             error_status_code=_error_status_code(exc),
-            error_type=type(exc).__name__,
+            error_type="EmptyTranscription" if isinstance(exc, EmptyTranscriptionError) else type(exc).__name__,
         )
         status_code = _error_status_code(exc)
         if status_code in {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}:
@@ -752,9 +816,7 @@ def transcribe_audio(
                 "如果持续出现，请在硅基流动控制台检查模型状态、额度和网络连接。"
             ) from exc
         raise
-    text = getattr(response, "text", "")
-    if not text and isinstance(response, dict):
-        text = response.get("text", "")
+    text = _transcription_text(response)
     cleaned = clean_transcript(text, language=language, term_hints=term_hints)
     text = cleaned["text"]
 

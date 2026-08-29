@@ -5,7 +5,9 @@ import hashlib
 import os
 import random
 import re
+import threading
 import time
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,10 +20,15 @@ _MATERIAL_HISTORY_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "literature_material_history.jsonl"
 )
 _TRANSIENT_API_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}
+_MATERIAL_HISTORY_THREAD_LOCK = threading.Lock()
 
 
 class MaterialGenerationError(RuntimeError):
     """AI 文献生成失败且没有安全的不重复本地材料可用。"""
+
+
+class MaterialDuplicateError(ValueError):
+    """A concurrent session reserved the same material first."""
 
 
 MATERIALS = (
@@ -229,7 +236,52 @@ def material_fingerprint(material_or_text: object) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _read_material_history(path: Optional[Path] = None, limit: int = 120) -> list[dict]:
+@contextmanager
+def _material_history_lock(history_path: Path):
+    """Serialize material reservations across threads and app processes.
+
+    Streamlit can run more than one browser session in the same process, and
+    users may also start a second process from the desktop shortcut.  A small
+    sibling lock file prevents the read/check/append sequence from racing.
+    The lock is best-effort on unusual filesystems; normal write failures are
+    still surfaced to the caller instead of weakening the no-repeat promise.
+    """
+    lock_path = history_path.with_name(history_path.name + ".lock")
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with _MATERIAL_HISTORY_THREAD_LOCK:
+        lock_file = lock_path.open("a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except (OSError, ValueError):
+                pass
+            lock_file.close()
+
+
+def _read_material_history(path: Optional[Path] = None, limit: Optional[int] = None) -> list[dict]:
     """Read prior generated materials, tolerating a missing/corrupt log."""
     history_path = Path(path or _MATERIAL_HISTORY_PATH)
     try:
@@ -237,7 +289,8 @@ def _read_material_history(path: Optional[Path] = None, limit: int = 120) -> lis
     except (FileNotFoundError, OSError, UnicodeError):
         return []
     records: list[dict] = []
-    for line in lines[-max(1, int(limit)) :]:
+    selected_lines = lines if limit is None else lines[-max(1, int(limit)) :]
+    for line in selected_lines:
         try:
             record = json.loads(line)
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -247,26 +300,44 @@ def _read_material_history(path: Optional[Path] = None, limit: int = 120) -> lis
     return records
 
 
-def _record_material(material: dict, path: Optional[Path] = None) -> None:
-    """Persist a generated article so a later app session can avoid it."""
+def _record_material(
+    material: dict,
+    path: Optional[Path] = None,
+    *,
+    reject_duplicates: bool = False,
+) -> bool:
+    """Persist a generated article so later sessions can avoid it.
+
+    ``reject_duplicates`` performs the final duplicate check while holding the
+    file lock.  Generation happens outside the lock, so two callers can still
+    ask the model concurrently, but only one can reserve/write the same
+    article; the other receives ``MaterialDuplicateError`` and retries.
+    """
     history_path = Path(path or _MATERIAL_HISTORY_PATH)
     try:
-        history_path.parent.mkdir(parents=True, exist_ok=True)
-        record = {
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "source": material.get("source", "ai"),
-            "id": material.get("id", ""),
-            "title": material.get("title", ""),
-            "field": material.get("field", ""),
-            "text": material.get("text", ""),
-            "fingerprint": material_fingerprint(material),
-        }
-        with history_path.open("a", encoding="utf-8") as history_file:
-            history_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError:
-        # Persistence is best-effort; the in-memory session check still
-        # protects the current run when the data folder is read-only.
-        return
+        with _material_history_lock(history_path):
+            if reject_duplicates and _is_duplicate_material(
+                material, _read_material_history(history_path)
+            ):
+                raise MaterialDuplicateError("文献已被另一个会话记录")
+            record = {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "source": material.get("source", "ai"),
+                "id": material.get("id", ""),
+                "title": material.get("title", ""),
+                "field": material.get("field", ""),
+                "text": material.get("text", ""),
+                "fingerprint": material_fingerprint(material),
+            }
+            with history_path.open("a", encoding="utf-8") as history_file:
+                history_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return True
+    except MaterialDuplicateError:
+        raise
+    except (OSError, TypeError, ValueError):
+        # The caller must not claim a cross-session no-repeat guarantee when
+        # the history file cannot be written.
+        return False
 
 
 def _as_material_records(materials: Optional[Iterable[object]]) -> list[dict]:
@@ -441,6 +512,8 @@ def _normalise_generated_material(raw: dict, requested_field: str = "") -> dict:
         raise ValueError("文献标题过短")
     if english_word_count < 100:
         raise ValueError("文献正文过短，至少需要约 100 个英文单词")
+    if english_word_count > 240:
+        raise ValueError("文献正文过长，应控制在约 130–180 个英文单词")
     if len(terms) < 6:
         raise ValueError("材料专业术语不足")
     if len(reference) < 40:
@@ -498,15 +571,38 @@ def generate_material(
             )
             if _is_duplicate_material(candidate, previous):
                 raise ValueError("模型生成了重复或高度相似的文献")
-            _record_material(candidate)
+            if not _record_material(candidate, reject_duplicates=True):
+                raise MaterialGenerationError(
+                    "无法写入文献去重记录；请确认 data 文件夹可写后重试。"
+                )
             return candidate
-        except Exception as exc:
+        except MaterialGenerationError:
+            # A persistence/configuration failure is not fixed by asking the
+            # model for another article, and must remain visible to the UI.
+            raise
+        except RuntimeError as exc:
+            # The chat layer has already retried transient HTTP failures.  A
+            # non-transient API error (for example 401/403) should not be
+            # hidden behind several identical generation attempts.
             last_error = exc
-            # Keep the rejected candidate/history in the next prompt and ask
-            # for a genuinely different angle on the next attempt.
+            if not _is_transient_generation_error(exc):
+                raise MaterialGenerationError(
+                    f"文献模型调用失败：{str(exc)[:160]}"
+                ) from exc
+            continue
+        except ValueError as exc:
+            # Malformed JSON, too-short text, or a duplicate is safe to retry
+            # with a different random angle.  Unexpected TypeError/AttributeError
+            # instances are programming/configuration errors and should not be
+            # silently converted into a provider outage fallback.
+            last_error = exc
             if candidate:
                 previous.append(candidate)
             continue
+        except Exception:
+            # Do not turn programming errors into a misleading provider
+            # outage message.  They should fail loudly during development.
+            raise
     detail = str(last_error or "未知错误").strip()
     raise MaterialGenerationError(
         "AI 文献生成暂时失败，未返回可用且不重复的材料。"
@@ -543,13 +639,34 @@ def create_material(
     model: Optional[str] = None,
 ) -> dict:
     """Generate a fresh AI article, with a strict no-repeat local fallback."""
+    exclude_records = _as_material_records(exclude_materials)
     try:
-        return generate_material(field=field, exclude_materials=exclude_materials, model=model)
+        return generate_material(field=field, exclude_materials=exclude_records, model=model)
     except MaterialGenerationError as generation_error:
-        fallback = get_unseen_fallback_material(field=field, exclude_materials=exclude_materials)
-        fallback["source"] = "local-fallback"
-        fallback["generation_error"] = str(generation_error)
-        return fallback
+        # Reserve a local item under the same lock used for AI articles.  If
+        # another process wins the race between selection and append, exclude
+        # that item and atomically reserve the next one instead of repeating it.
+        fallback_exclusions = list(exclude_records)
+        for _ in range(max(1, len(MATERIALS))):
+            fallback = get_unseen_fallback_material(
+                field=field,
+                exclude_materials=fallback_exclusions,
+            )
+            fallback["source"] = "local-fallback"
+            fallback["generation_error"] = str(generation_error)
+            try:
+                recorded = _record_material(fallback, reject_duplicates=True)
+            except MaterialDuplicateError:
+                fallback_exclusions.append(fallback)
+                continue
+            if not recorded:
+                raise MaterialGenerationError(
+                    "AI 文献不可用且无法写入备用材料去重记录；请确认 data 文件夹可写后重试。"
+                ) from generation_error
+            return fallback
+        raise MaterialGenerationError(
+            f"“{field or '材料科学与工程'}”方向没有可安全分配的备用材料；请稍后重试。"
+        ) from generation_error
 
 
 def get_random_material(

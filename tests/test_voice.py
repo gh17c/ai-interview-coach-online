@@ -76,6 +76,55 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result, "备用模型识别成功")
         self.assertEqual(calls, ["primary-asr", "fallback-asr"])
 
+    def test_transcription_switches_model_when_primary_returns_empty_text(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs["model"])
+            text = "" if kwargs["model"] == "primary-asr" else "备用模型识别成功"
+            return SimpleNamespace(text=text)
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "0",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+        self.assertEqual(result, "备用模型识别成功")
+        self.assertEqual(calls, ["primary-asr", "fallback-asr"])
+
+    def test_transcription_reports_empty_response_after_all_models_fail(self):
+        from modules.voice import VoiceCaptureError, transcribe_audio
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(create=lambda **kwargs: SimpleNamespace(text=""))
+            )
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "0",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            with self.assertRaisesRegex(VoiceCaptureError, "空文本"):
+                transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
     def test_transcription_retries_temporary_503_then_succeeds(self):
         from modules.voice import transcribe_audio
 
@@ -206,6 +255,29 @@ class VoiceTests(unittest.TestCase):
             result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
 
         self.assertEqual(result, "测试语音")
+
+    def test_transcription_sets_bounded_provider_timeout(self):
+        """A stalled ASR request must not leave the Streamlit run hanging."""
+        from modules.voice import transcribe_audio
+
+        calls = {}
+
+        def create(**kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(text="有界超时")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+        self.assertEqual(result, "有界超时")
+        self.assertIn("timeout", calls)
+        self.assertGreaterEqual(float(calls["timeout"]), 10.0)
+        self.assertLessEqual(float(calls["timeout"]), 180.0)
 
     def test_transcription_sends_webm_mime_and_browser_meter_stats(self):
         from modules.voice import transcribe_audio

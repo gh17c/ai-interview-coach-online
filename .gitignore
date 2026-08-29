@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/sessions/*.json
 data/literature_material_history.jsonl
+data/literature_material_history.jsonl.lock
 .streamlit/
 venv/
 .venv/
@@ -11,5 +12,4 @@ env/
 *.egg-info/
 dist/
 build/
-dist/
 *.log
