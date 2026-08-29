@@ -564,9 +564,9 @@ def _is_model_unavailable_error(error: Exception) -> bool:
 
 def _stt_retry_limit() -> int:
     try:
-        return max(0, min(4, int(os.getenv("SILICONFLOW_STT_MAX_RETRIES", "3"))))
+        return max(0, min(4, int(os.getenv("SILICONFLOW_STT_MAX_RETRIES", "1"))))
     except (TypeError, ValueError):
-        return 3
+        return 1
 
 
 def _stt_timeout_seconds() -> float:
@@ -579,9 +579,9 @@ def _stt_timeout_seconds() -> float:
     allow an accidental zero or an unbounded value.
     """
     try:
-        return max(10.0, min(180.0, float(os.getenv("SILICONFLOW_STT_TIMEOUT_SECONDS", "90"))))
+        return max(10.0, min(180.0, float(os.getenv("SILICONFLOW_STT_TIMEOUT_SECONDS", "45"))))
     except (TypeError, ValueError):
-        return 90.0
+        return 45.0
 
 
 def _stt_total_timeout_seconds() -> float:
