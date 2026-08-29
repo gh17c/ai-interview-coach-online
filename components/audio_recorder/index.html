@@ -188,6 +188,7 @@
         let selectedDeviceId = "";
         let devicesLoaded = false;
         let selectedMode = "auto";
+        let deviceSelectionExplicit = false;
 
         function postMessage(type, payload) {
           window.parent.postMessage(
@@ -400,14 +401,18 @@
               : { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } };
           const deviceIds = [];
           if (selectedDeviceId) deviceIds.push(selectedDeviceId);
-          try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            devices
-              .filter((device) => device.kind === "audioinput" && device.deviceId)
-              .forEach((device) => {
-                if (!deviceIds.includes(device.deviceId)) deviceIds.push(device.deviceId);
-              });
-          } catch (error) {}
+          // An explicit device choice is authoritative. Only automatic mode
+          // may probe the other inputs to recover from a muted Windows default.
+          if (!deviceSelectionExplicit) {
+            try {
+              const devices = await navigator.mediaDevices.enumerateDevices();
+              devices
+                .filter((device) => device.kind === "audioinput" && device.deviceId)
+                .forEach((device) => {
+                  if (deviceIds.length < 3 && !deviceIds.includes(device.deviceId)) deviceIds.push(device.deviceId);
+                });
+            } catch (error) {}
+          }
           const attempts = [];
           const addAttempt = (audio) => {
             const serialized = JSON.stringify(audio);
@@ -415,18 +420,30 @@
               attempts.push({ audio });
             }
           };
-          // Prefer the user's selected device, then try every enumerated input
+          // Prefer the user's selected/default device, then try at most two
+          // additional enumerated inputs
           // so a muted Windows default/communications endpoint cannot block
           // an otherwise usable laptop microphone.
-          deviceIds.forEach((deviceId) => addAttempt({
-            deviceId: { exact: deviceId },
+          if (deviceIds[0]) addAttempt({
+            deviceId: { exact: deviceIds[0] },
             ...processing,
             channelCount: { ideal: 1 },
             sampleRate: { ideal: 16000 },
-          }));
-          addAttempt({ ...processing, channelCount: { ideal: 1 }, sampleRate: { ideal: 16000 } });
-          deviceIds.forEach((deviceId) => addAttempt({ deviceId: { exact: deviceId }, channelCount: { ideal: 1 } }));
-          addAttempt(true);
+          });
+          if (deviceIds[0]) addAttempt({ deviceId: { exact: deviceIds[0] }, channelCount: { ideal: 1 } });
+          if (!deviceSelectionExplicit) {
+            deviceIds.slice(1).forEach((deviceId) => addAttempt({ deviceId: { exact: deviceId }, channelCount: { ideal: 1 } }));
+          }
+          if (!deviceIds.length) {
+            addAttempt({
+              ...processing,
+              channelCount: { ideal: 1 },
+              sampleRate: { ideal: 16000 },
+            });
+          }
+          if (!deviceSelectionExplicit) {
+            addAttempt(true);
+          }
           let lastError = null;
           const waitForUsableTrack = async (candidate) => {
             const track = candidate && candidate.getAudioTracks && candidate.getAudioTracks()[0];
@@ -446,7 +463,7 @@
                 resolve(usable);
               };
               const onUnmute = () => finish(track.readyState === "live" && track.enabled !== false && !track.muted);
-              const timeout = setTimeout(() => finish(!track.muted), 900);
+              const timeout = setTimeout(() => finish(!track.muted), 400);
               const poll = setInterval(() => {
                 if (track.readyState !== "live" || track.enabled === false) finish(false);
                 else if (!track.muted) finish(true);
@@ -690,6 +707,7 @@
         });
         deviceSelect.addEventListener("change", () => {
           selectedDeviceId = deviceSelect.value || "";
+          deviceSelectionExplicit = Boolean(selectedDeviceId);
           setStatus("已选择输入设备，下一次录音时生效。", "ok");
         });
         refreshDevicesButton.addEventListener("click", refreshDevices);

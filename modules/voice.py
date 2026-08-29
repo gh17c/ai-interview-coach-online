@@ -663,9 +663,7 @@ def transcribe_audio(
         try:
             response = _create_transcription_with_retry(client, request_kwargs)
         except Exception as exc:
-            if "prompt" in request_kwargs and (
-                _prompt_argument_unsupported(exc) or _error_status_code(exc) in {400, 422}
-            ):
+            if "prompt" in request_kwargs and _prompt_argument_unsupported(exc):
                 request_kwargs.pop("prompt", None)
                 response = _create_transcription_with_retry(client, request_kwargs)
             else:

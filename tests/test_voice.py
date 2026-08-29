@@ -266,7 +266,7 @@ class VoiceTests(unittest.TestCase):
         def create(**kwargs):
             calls.append(kwargs)
             if "prompt" in kwargs:
-                raise ValidationError("invalid request")
+                raise ValidationError("invalid prompt field")
             return SimpleNamespace(text="开放麦克风语音")
 
         fake_client = SimpleNamespace(
@@ -284,6 +284,34 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result, "开放麦克风语音")
         self.assertEqual(len(calls), 2)
         self.assertNotIn("prompt", calls[1])
+
+    def test_transcription_does_not_hide_unrelated_validation_error(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        class ValidationError(RuntimeError):
+            status_code = 400
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            raise ValidationError("invalid audio file")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            with self.assertRaises(ValidationError):
+                transcribe_audio(
+                    make_wav(amplitude=8000),
+                    "answer.wav",
+                    term_hints=["晶界"],
+                )
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("prompt", calls[0])
 
     def test_transcription_rejects_silent_browser_recording_using_client_meter(self):
         from modules.voice import VoiceCaptureError, transcribe_audio
