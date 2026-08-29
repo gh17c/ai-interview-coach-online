@@ -69,6 +69,9 @@ Windows 分享与安装说明见 [SHARING.md](SHARING.md)。运行 `build_share_
 以减少专业词汇被识别成同音普通词的情况。页面保留“查看原始转写”入口，提交前仍可手动修正。
 
 语音识别默认使用硅基流动的 `FunAudioLLM/SenseVoiceSmall`，不需要额外的 TTS Key。
+遇到临时的 503、502、504 或 429 时，系统会自动进行最多 3 次短间隔重试；
+仍失败时会提示检查硅基流动控制台中的模型状态、额度和网络连接。可在 `.env` 中通过
+`SILICONFLOW_STT_MAX_RETRIES` 调整重试次数。
 
 ### 简历文件导入
 

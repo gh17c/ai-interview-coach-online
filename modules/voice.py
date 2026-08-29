@@ -489,6 +489,57 @@ def _prompt_argument_unsupported(error: Exception) -> bool:
     )
 
 
+def _error_status_code(error: Exception) -> Optional[int]:
+    """Extract an HTTP status code from OpenAI-compatible client errors."""
+    for candidate in (
+        getattr(error, "status_code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+    ):
+        try:
+            if candidate is not None:
+                return int(candidate)
+        except (TypeError, ValueError):
+            continue
+    match = re.search(r"\b(4\d\d|5\d\d)\b", str(error or ""))
+    return int(match.group(1)) if match else None
+
+
+def _is_retryable_transcription_error(error: Exception) -> bool:
+    """Return True for transient provider/network failures."""
+    status_code = _error_status_code(error)
+    if status_code in {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}:
+        return True
+    return isinstance(error, (TimeoutError, ConnectionError)) or type(error).__name__ in {
+        "APITimeoutError",
+        "APIConnectionError",
+    }
+
+
+def _stt_retry_limit() -> int:
+    try:
+        return max(0, min(4, int(os.getenv("SILICONFLOW_STT_MAX_RETRIES", "3"))))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _create_transcription_with_retry(client, request_kwargs: dict):
+    """Call the STT endpoint with bounded retry/backoff for transient errors."""
+    retry_limit = _stt_retry_limit()
+    last_error = None
+    for attempt in range(retry_limit + 1):
+        try:
+            return client.audio.transcriptions.create(**request_kwargs)
+        except Exception as exc:
+            last_error = exc
+            if not _is_retryable_transcription_error(exc) or attempt >= retry_limit:
+                raise
+            # Keep waits short enough for an interactive interview while
+            # avoiding a burst against a temporarily unavailable endpoint.
+            delay = min(4.0, 0.6 * (2 ** attempt))
+            time.sleep(delay)
+    raise last_error
+
+
 def transcribe_audio(
     audio_bytes: bytes,
     filename: str = "answer.wav",
@@ -610,14 +661,16 @@ def transcribe_audio(
     try:
         client = _get_client()
         try:
-            response = client.audio.transcriptions.create(**request_kwargs)
+            response = _create_transcription_with_retry(client, request_kwargs)
         except Exception as exc:
-            if "prompt" in request_kwargs and _prompt_argument_unsupported(exc):
+            if "prompt" in request_kwargs and (
+                _prompt_argument_unsupported(exc) or _error_status_code(exc) in {400, 422}
+            ):
                 request_kwargs.pop("prompt", None)
-                response = client.audio.transcriptions.create(**request_kwargs)
+                response = _create_transcription_with_retry(client, request_kwargs)
             else:
                 raise
-    except Exception:
+    except Exception as exc:
         _log_audio_event(
             model=model,
             audio_bytes=audio_bytes,
@@ -625,6 +678,12 @@ def transcribe_audio(
             started=started,
             status="api_error",
         )
+        status_code = _error_status_code(exc)
+        if status_code in {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}:
+            raise VoiceCaptureError(
+                f"语音识别服务暂时不可用（HTTP {status_code}）。已自动重试 {_stt_retry_limit()} 次，"
+                "请稍等片刻后重新录音；如果持续出现，请在硅基流动控制台检查模型状态和额度。"
+            ) from exc
         raise
     text = getattr(response, "text", "")
     if not text and isinstance(response, dict):

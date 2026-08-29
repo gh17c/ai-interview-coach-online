@@ -4,6 +4,7 @@ import struct
 import unittest
 import wave
 import inspect
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -24,6 +25,51 @@ def make_wav(amplitude: int = 0, duration: float = 1.0, sample_rate: int = 16000
 
 
 class VoiceTests(unittest.TestCase):
+    def test_transcription_retries_temporary_503_then_succeeds(self):
+        from modules.voice import transcribe_audio
+
+        calls = {"count": 0}
+
+        class Temporary503Error(RuntimeError):
+            status_code = 503
+
+        def create(**kwargs):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise Temporary503Error("service unavailable")
+            return SimpleNamespace(text="恢复后的语音")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(os.environ, {"SILICONFLOW_STT_MAX_RETRIES": "2"}), patch(
+            "modules.voice._get_client", return_value=fake_client
+        ), patch("modules.voice._log_audio_event"), patch("modules.voice.time.sleep") as sleep:
+            result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+        self.assertEqual(result, "恢复后的语音")
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_transcription_reports_clear_error_after_503_retries(self):
+        from modules.voice import VoiceCaptureError, transcribe_audio
+
+        class Temporary503Error(RuntimeError):
+            status_code = 503
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(
+                transcriptions=SimpleNamespace(
+                    create=lambda **kwargs: (_ for _ in ()).throw(Temporary503Error("service unavailable"))
+                )
+            )
+        )
+        with patch.dict(os.environ, {"SILICONFLOW_STT_MAX_RETRIES": "1"}), patch(
+            "modules.voice._get_client", return_value=fake_client
+        ), patch("modules.voice._log_audio_event"), patch("modules.voice.time.sleep"):
+            with self.assertRaisesRegex(VoiceCaptureError, "503"):
+                transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
     def test_clean_transcript_filters_hesitations_and_normalizes_material_terms(self):
         from modules.voice import clean_transcript
 
@@ -207,6 +253,36 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(result, "晶界")
         self.assertEqual(len(calls), 2)
         self.assertIn("prompt", calls[0])
+        self.assertNotIn("prompt", calls[1])
+
+    def test_transcription_retries_without_prompt_for_validation_error(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        class ValidationError(RuntimeError):
+            status_code = 400
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            if "prompt" in kwargs:
+                raise ValidationError("invalid request")
+            return SimpleNamespace(text="开放麦克风语音")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(
+                make_wav(amplitude=8000),
+                "answer.wav",
+                term_hints=["晶界"],
+            )
+
+        self.assertEqual(result, "开放麦克风语音")
+        self.assertEqual(len(calls), 2)
         self.assertNotIn("prompt", calls[1])
 
     def test_transcription_rejects_silent_browser_recording_using_client_meter(self):

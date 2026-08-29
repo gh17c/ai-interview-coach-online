@@ -391,9 +391,6 @@
         }
 
         async function requestMicrophone() {
-          const deviceConstraint = selectedDeviceId
-            ? { deviceId: { exact: selectedDeviceId } }
-            : {};
           const processing = selectedMode === "headset"
             // Headset profile requests the equivalent of:
             // echoCancellation: false, noiseSuppression: false, autoGainControl: false
@@ -401,26 +398,72 @@
             : selectedMode === "speaker"
               ? { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } }
               : { echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } };
-          const attempts = [
-            // Use the selected environment profile; ``ideal`` values remain
-            // negotiable so Windows headset and laptop drivers can accept them.
-            { audio: Object.assign({}, deviceConstraint, {
-              ...processing,
-              channelCount: { ideal: 1 },
-              sampleRate: { ideal: 16000 },
-            }) },
-            // Some Windows headset drivers reject the processing constraints.
-            { audio: Object.assign({}, deviceConstraint, {
-              channelCount: { ideal: 1 },
-            }) },
-            // Last resort: let the browser choose its compatible defaults.
-            { audio: selectedDeviceId ? deviceConstraint : true },
-            { audio: true },
-          ];
+          const deviceIds = [];
+          if (selectedDeviceId) deviceIds.push(selectedDeviceId);
+          try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            devices
+              .filter((device) => device.kind === "audioinput" && device.deviceId)
+              .forEach((device) => {
+                if (!deviceIds.includes(device.deviceId)) deviceIds.push(device.deviceId);
+              });
+          } catch (error) {}
+          const attempts = [];
+          const addAttempt = (audio) => {
+            const serialized = JSON.stringify(audio);
+            if (!attempts.some((candidate) => JSON.stringify(candidate.audio) === serialized)) {
+              attempts.push({ audio });
+            }
+          };
+          // Prefer the user's selected device, then try every enumerated input
+          // so a muted Windows default/communications endpoint cannot block
+          // an otherwise usable laptop microphone.
+          deviceIds.forEach((deviceId) => addAttempt({
+            deviceId: { exact: deviceId },
+            ...processing,
+            channelCount: { ideal: 1 },
+            sampleRate: { ideal: 16000 },
+          }));
+          addAttempt({ ...processing, channelCount: { ideal: 1 }, sampleRate: { ideal: 16000 } });
+          deviceIds.forEach((deviceId) => addAttempt({ deviceId: { exact: deviceId }, channelCount: { ideal: 1 } }));
+          addAttempt(true);
           let lastError = null;
+          const waitForUsableTrack = async (candidate) => {
+            const track = candidate && candidate.getAudioTracks && candidate.getAudioTracks()[0];
+            if (!track || track.readyState !== "live" || track.enabled === false) return false;
+            if (!track.muted) return true;
+            // Windows can briefly report a newly granted input as muted while
+            // the driver wakes up. Give it a short window to emit `unmute`
+            // before abandoning that device.
+            return await new Promise((resolve) => {
+              let settled = false;
+              const finish = (usable) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                clearInterval(poll);
+                try { track.removeEventListener("unmute", onUnmute); } catch (error) {}
+                resolve(usable);
+              };
+              const onUnmute = () => finish(track.readyState === "live" && track.enabled !== false && !track.muted);
+              const timeout = setTimeout(() => finish(!track.muted), 900);
+              const poll = setInterval(() => {
+                if (track.readyState !== "live" || track.enabled === false) finish(false);
+                else if (!track.muted) finish(true);
+              }, 100);
+              try { track.addEventListener("unmute", onUnmute, { once: true }); } catch (error) {}
+            });
+          };
           for (const constraints of attempts) {
             try {
-              return await navigator.mediaDevices.getUserMedia(constraints);
+              const candidate = await navigator.mediaDevices.getUserMedia(constraints);
+              const usable = await waitForUsableTrack(candidate);
+              // A few Windows drivers grant permission but return a muted
+              // track. Release it and continue with the next input instead of
+              // sending a guaranteed-silent recording to the STT endpoint.
+              if (usable) return candidate;
+              if (candidate && candidate.getTracks) candidate.getTracks().forEach((item) => item.stop());
+              lastError = new Error("Microphone track is muted or inactive");
             } catch (error) {
               lastError = error;
             }
@@ -559,6 +602,21 @@
             stream = await requestMicrophone();
             // Permission has now been granted, so browsers can reveal real
             // device labels and IDs for the next recording.
+            try {
+              const activeTrack = stream && stream.getAudioTracks && stream.getAudioTracks()[0];
+              const activeSettings = activeTrack && activeTrack.getSettings ? activeTrack.getSettings() : {};
+              if (activeSettings.deviceId) selectedDeviceId = activeSettings.deviceId;
+              if (activeTrack && activeTrack.addEventListener) {
+                activeTrack.addEventListener("mute", () => {
+                  setStatus("麦克风信号暂时中断，请检查 Windows 输入设备是否被静音。", "error");
+                });
+                activeTrack.addEventListener("unmute", () => {
+                  if (mediaRecorder && mediaRecorder.state === "recording") {
+                    setStatus("麦克风信号已恢复，请继续说话。", "ok");
+                  }
+                });
+              }
+            } catch (error) {}
             await refreshDevices();
             inspectProcessingSettings();
             currentMime = supportedMimeType();
