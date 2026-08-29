@@ -1,10 +1,42 @@
 import unittest
+import json
+import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 
 class LiteratureInterviewTests(unittest.TestCase):
+    def _generated_payload(self, title="AI-generated cathode interface"):
+        return {
+            "title": title,
+            "field": "电池材料",
+            "text": (
+                "High-voltage lithium-ion cathodes often suffer from interfacial reactions that "
+                "increase impedance during cycling. In this study, a compositionally graded "
+                "surface layer was formed on a nickel-rich layered oxide by a controlled annealing "
+                "step. The gradient reduced the abrupt mismatch in lattice parameters between the "
+                "bulk and the electrolyte-facing surface, while a small amount of dopant stabilized "
+                "the oxygen sublattice. Operando diffraction indicated that the treated particles "
+                "underwent a smaller anisotropic contraction during delithiation. Electrochemical "
+                "tests showed improved capacity retention at elevated temperature, although the "
+                "benefit diminished when the layer became too thick. The result suggests that "
+                "surface composition, defect concentration and ionic transport should be optimized "
+                "together rather than evaluated independently."
+            ),
+            "terms": [
+                "high-voltage cathode", "interfacial reaction", "compositionally graded layer",
+                "nickel-rich layered oxide", "lattice parameter", "oxygen sublattice",
+                "anisotropic contraction", "delithiation", "capacity retention",
+            ],
+            "reference_translation": (
+                "高电压锂离子电池正极在循环过程中容易发生界面反应并导致阻抗升高。"
+                "本研究通过受控退火在富镍层状氧化物表面形成成分梯度层，缓解了体相与电解液接触表面之间的晶格参数突变，"
+                "并通过少量掺杂稳定氧亚晶格。结果表明，表面成分、缺陷浓度和离子传输需要协同优化。"
+            ),
+        }
+
     def test_random_material_has_intermediate_length_and_material_terms(self):
         from modules.literature_interview import MATERIALS, get_random_material
 
@@ -44,6 +76,70 @@ class LiteratureInterviewTests(unittest.TestCase):
         fields = set(list_material_fields())
         self.assertTrue({"电子材料", "无机非金属材料", "陶瓷材料", "电池材料"}.issubset(fields))
         self.assertTrue({"高分子材料", "生物医用材料", "表面工程与腐蚀", "计算材料与模拟"}.issubset(fields))
+
+    def test_generate_material_uses_ai_and_keeps_selected_field(self):
+        from modules.literature_interview import generate_material
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "materials.jsonl"
+            payload = self._generated_payload()
+            with patch("modules.literature_interview.chat", return_value={"content": json.dumps(payload)}), patch(
+                "modules.literature_interview._MATERIAL_HISTORY_PATH", history_path
+            ):
+                material = generate_material(field="电池材料")
+            history = history_path.read_text(encoding="utf-8")
+
+        self.assertEqual(material["field"], "电池材料")
+        self.assertEqual(material["source"], "ai")
+        self.assertTrue(material["id"].startswith("ai-"))
+        self.assertGreater(len(material["text"].split()), 100)
+        self.assertIn(material["title"], history)
+
+    def test_generate_material_rejects_duplicate_and_requests_a_new_article(self):
+        from modules.literature_interview import generate_material
+
+        first = self._generated_payload("重复的电池界面研究")
+        second = self._generated_payload("全新的电池热稳定性研究")
+        second["text"] = second["text"].replace(
+            "compositionally graded surface layer", "porous gradient coating"
+        ).replace(
+            "nickel-rich layered oxide", "lithium iron phosphate composite"
+        ).replace(
+            "oxygen sublattice", "electrochemical reaction network"
+        ).replace(
+            "elevated temperature", "fast charging conditions"
+        )
+        responses = [{"content": json.dumps(first)}, {"content": json.dumps(second)}]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "materials.jsonl"
+
+            def fake_chat(*args, **kwargs):
+                return responses.pop(0)
+
+            with patch("modules.literature_interview.chat", side_effect=fake_chat), patch(
+                "modules.literature_interview._MATERIAL_HISTORY_PATH", history_path
+            ):
+                generated = generate_material(field="电池材料")
+                generated_again = generate_material(field="电池材料", exclude_materials=[generated])
+
+        self.assertNotEqual(generated["title"], generated_again["title"])
+        self.assertEqual(generated_again["source"], "ai")
+
+    def test_local_fallback_is_unseen_and_does_not_silently_repeat(self):
+        from modules.literature_interview import MaterialGenerationError, create_material
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "modules.literature_interview._MATERIAL_HISTORY_PATH",
+            Path(temp_dir) / "materials.jsonl",
+        ), patch.dict(
+            os.environ,
+            {"LITERATURE_GENERATION_ATTEMPTS": "1"},
+        ), patch("modules.literature_interview.chat", side_effect=RuntimeError("offline")):
+            first = create_material(field="电池材料")
+            self.assertEqual(first["source"], "local-fallback")
+            with self.assertRaises(MaterialGenerationError):
+                create_material(field="电池材料", exclude_materials=[first])
 
     def test_each_material_has_sufficient_translation_content(self):
         from modules.literature_interview import MATERIALS

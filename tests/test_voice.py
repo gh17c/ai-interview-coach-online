@@ -25,6 +25,57 @@ def make_wav(amplitude: int = 0, duration: float = 1.0, sample_rate: int = 16000
 
 
 class VoiceTests(unittest.TestCase):
+    def test_stt_model_candidates_preserve_model_names(self):
+        from modules.voice import _stt_model_candidates
+
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "Qwen/Qwen3-ASR-1.7B",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "FunAudioLLM/SenseVoiceSmall,XingChenAGI/XingChenASR-V3.2",
+            },
+        ):
+            self.assertEqual(
+                _stt_model_candidates(),
+                [
+                    "Qwen/Qwen3-ASR-1.7B",
+                    "FunAudioLLM/SenseVoiceSmall",
+                    "XingChenAGI/XingChenASR-V3.2",
+                ],
+            )
+
+    def test_transcription_switches_to_configured_fallback_model_after_503(self):
+        from modules.voice import transcribe_audio
+
+        calls = []
+
+        class Temporary503Error(RuntimeError):
+            status_code = 503
+
+        def create(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "primary-asr":
+                raise Temporary503Error("service unavailable")
+            return SimpleNamespace(text="备用模型识别成功")
+
+        fake_client = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SILICONFLOW_STT_MODEL": "primary-asr",
+                "SILICONFLOW_STT_FALLBACK_MODELS": "fallback-asr",
+                "SILICONFLOW_STT_MAX_RETRIES": "0",
+            },
+        ), patch("modules.voice._get_client", return_value=fake_client), patch(
+            "modules.voice._log_audio_event"
+        ):
+            result = transcribe_audio(make_wav(amplitude=8000), "answer.wav")
+
+        self.assertEqual(result, "备用模型识别成功")
+        self.assertEqual(calls, ["primary-asr", "fallback-asr"])
+
     def test_transcription_retries_temporary_503_then_succeeds(self):
         from modules.voice import transcribe_audio
 

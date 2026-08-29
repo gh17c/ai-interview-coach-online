@@ -1,12 +1,27 @@
 """预推免英文文献翻译面试的材料、朗读评分与翻译评价。"""
 
 import json
+import hashlib
+import os
 import random
 import re
+import time
 from difflib import SequenceMatcher
-from typing import Optional
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, Optional
 
 from modules.api_client import chat
+
+
+_MATERIAL_HISTORY_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "literature_material_history.jsonl"
+)
+_TRANSIENT_API_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}
+
+
+class MaterialGenerationError(RuntimeError):
+    """AI 文献生成失败且没有安全的不重复本地材料可用。"""
 
 
 MATERIALS = (
@@ -198,14 +213,364 @@ def list_material_fields() -> list[str]:
     return list(dict.fromkeys(item["field"] for item in MATERIALS))
 
 
-def get_random_material(exclude_id: str = "", field: str = "") -> dict:
-    """按方向随机返回一段原创、适合中等难度预推免翻译环节的材料。"""
+def _normalise_for_comparison(value: object) -> str:
+    """Normalize article text/title for exact and near-duplicate detection."""
+    text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+
+
+def material_fingerprint(material_or_text: object) -> str:
+    """Return a stable fingerprint without exposing article content."""
+    if isinstance(material_or_text, dict):
+        value = material_or_text.get("text", "")
+    else:
+        value = material_or_text
+    normalized = _normalise_for_comparison(value)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _read_material_history(path: Optional[Path] = None, limit: int = 120) -> list[dict]:
+    """Read prior generated materials, tolerating a missing/corrupt log."""
+    history_path = Path(path or _MATERIAL_HISTORY_PATH)
+    try:
+        lines = history_path.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, OSError, UnicodeError):
+        return []
+    records: list[dict] = []
+    for line in lines[-max(1, int(limit)) :]:
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(record, dict) and (record.get("text") or record.get("fingerprint")):
+            records.append(record)
+    return records
+
+
+def _record_material(material: dict, path: Optional[Path] = None) -> None:
+    """Persist a generated article so a later app session can avoid it."""
+    history_path = Path(path or _MATERIAL_HISTORY_PATH)
+    try:
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "source": material.get("source", "ai"),
+            "id": material.get("id", ""),
+            "title": material.get("title", ""),
+            "field": material.get("field", ""),
+            "text": material.get("text", ""),
+            "fingerprint": material_fingerprint(material),
+        }
+        with history_path.open("a", encoding="utf-8") as history_file:
+            history_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        # Persistence is best-effort; the in-memory session check still
+        # protects the current run when the data folder is read-only.
+        return
+
+
+def _as_material_records(materials: Optional[Iterable[object]]) -> list[dict]:
+    records: list[dict] = []
+    for item in materials or []:
+        if isinstance(item, dict):
+            records.append(item)
+        elif item:
+            records.append({"text": str(item)})
+    return records
+
+
+def _is_duplicate_material(candidate: dict, previous_materials: Optional[Iterable[object]] = None) -> bool:
+    """Detect exact, title, or very-near text duplicates."""
+    candidate_fp = material_fingerprint(candidate)
+    candidate_title = _normalise_for_comparison(candidate.get("title", ""))
+    candidate_text = _normalise_for_comparison(candidate.get("text", ""))
+    for previous in _as_material_records(previous_materials):
+        if candidate_fp and candidate_fp == str(previous.get("fingerprint", "")):
+            return True
+        if candidate.get("id") and candidate.get("id") == previous.get("id"):
+            return True
+        previous_title = _normalise_for_comparison(previous.get("title", ""))
+        if candidate_title and previous_title and candidate_title == previous_title:
+            return True
+        previous_text = _normalise_for_comparison(previous.get("text", ""))
+        if candidate_text and previous_text and SequenceMatcher(None, candidate_text, previous_text).ratio() >= 0.94:
+            return True
+    return False
+
+
+def _history_prompt_summary(history: Iterable[dict], limit: int = 24) -> str:
+    summaries: list[str] = []
+    for item in list(history)[-limit:]:
+        title = str(item.get("title") or "").strip()
+        text = re.sub(r"\s+", " ", str(item.get("text") or "").strip())
+        if title or text:
+            summaries.append(f"- {title}: {text[:110]}")
+    return "\n".join(summaries) or "（暂无历史材料）"
+
+
+def _error_status_code(error: Exception) -> Optional[int]:
+    for candidate in (
+        getattr(error, "status_code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+    ):
+        try:
+            if candidate is not None:
+                return int(candidate)
+        except (TypeError, ValueError):
+            continue
+    match = re.search(r"\b(4\d\d|5\d\d)\b", str(error or ""))
+    return int(match.group(1)) if match else None
+
+
+def _generation_retry_limit() -> int:
+    try:
+        return max(0, min(4, int(os.getenv("LITERATURE_GENERATION_RETRIES", "2"))))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _generation_attempt_limit() -> int:
+    try:
+        return max(1, min(5, int(os.getenv("LITERATURE_GENERATION_ATTEMPTS", "3"))))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _is_transient_generation_error(error: Exception) -> bool:
+    return _error_status_code(error) in _TRANSIENT_API_STATUS_CODES or type(error).__name__ in {
+        "APITimeoutError",
+        "APIConnectionError",
+    }
+
+
+def _response_format_unsupported(error: Exception) -> bool:
+    message = str(error or "").lower()
+    return "response_format" in message and any(
+        marker in message
+        for marker in ("unknown", "unsupported", "unexpected", "invalid", "extra", "not allowed")
+    )
+
+
+def _call_generation_model(system_prompt: str, user_message: str, model: Optional[str] = None) -> dict:
+    """Call the configured chat model with short retries for provider outages."""
+    selected_model = model or os.getenv("LITERATURE_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+    retry_limit = _generation_retry_limit()
+    last_error: Optional[Exception] = None
+    for attempt in range(retry_limit + 1):
+        try:
+            try:
+                return chat(
+                    system_prompt,
+                    user_message,
+                    temperature=0.85,
+                    model=selected_model,
+                    response_format={"type": "json_object"},
+                    max_tokens=1100,
+                )
+            except Exception as exc:
+                # Older OpenAI-compatible gateways may reject JSON mode while
+                # still returning ordinary text. Retry once without that
+                # optional parameter before treating the model as unavailable.
+                if _response_format_unsupported(exc):
+                    return chat(
+                        system_prompt,
+                        user_message,
+                        temperature=0.85,
+                        model=selected_model,
+                        max_tokens=1100,
+                    )
+                raise
+        except Exception as exc:
+            last_error = exc
+            if not _is_transient_generation_error(exc) or attempt >= retry_limit:
+                raise
+            time.sleep(min(3.0, 0.5 * (2**attempt)))
+    raise last_error or RuntimeError("文献生成没有返回响应")
+
+
+def _parse_generation_json(content: object) -> dict:
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("模型未返回 JSON 文献对象")
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("模型返回的文献 JSON 无法解析") from exc
+    if isinstance(parsed, dict) and isinstance(parsed.get("material"), dict):
+        parsed = parsed["material"]
+    if not isinstance(parsed, dict):
+        raise ValueError("模型返回的文献不是 JSON 对象")
+    return parsed
+
+
+def _normalise_generated_material(raw: dict, requested_field: str = "") -> dict:
+    title = re.sub(r"\s+", " ", str(raw.get("title") or "").strip()).strip("\"'")
+    text = re.sub(r"\s+", " ", str(raw.get("text") or "").strip())
+    reference = re.sub(r"\s+", " ", str(raw.get("reference_translation") or "").strip())
+    field = str(requested_field or raw.get("field") or "材料科学与工程").strip()
+    terms_value = raw.get("terms") or []
+    if isinstance(terms_value, str):
+        terms_value = re.split(r"[,，;；、]\s*", terms_value)
+    terms: list[str] = []
+    for term in terms_value if isinstance(terms_value, (list, tuple)) else []:
+        normalized = re.sub(r"\s+", " ", str(term or "").strip())
+        if normalized and normalized not in terms:
+            terms.append(normalized)
+    english_word_count = len(re.findall(r"[A-Za-z]+", text))
+    if len(title) < 8:
+        raise ValueError("文献标题过短")
+    if english_word_count < 100:
+        raise ValueError("文献正文过短，至少需要约 100 个英文单词")
+    if len(terms) < 6:
+        raise ValueError("材料专业术语不足")
+    if len(reference) < 40:
+        raise ValueError("参考译文过短")
+    fingerprint = material_fingerprint(text)
+    return {
+        "id": f"ai-{fingerprint[:16]}",
+        "title": title,
+        "field": field,
+        "text": text,
+        "terms": terms[:20],
+        "reference_translation": reference,
+        "difficulty": "中等",
+        "source": "ai",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def generate_material(
+    field: str = "",
+    exclude_materials: Optional[Iterable[object]] = None,
+    model: Optional[str] = None,
+) -> dict:
+    """Ask the model for a fresh article in ``field`` and persist its fingerprint.
+
+    The function never silently returns a duplicate: invalid, repeated or
+    unavailable responses are retried with a changed angle, then surfaced as
+    ``MaterialGenerationError`` for the UI to handle.
+    """
+    requested_field = str(field or "").strip()
+    previous = _read_material_history()
+    previous.extend(_as_material_records(exclude_materials))
+    system_prompt = (
+        "你是材料科学与工程专业的预推免英文文献面试材料命题人。"
+        "只生成适合一分钟准备、中文口译的原创英文科研短文，不要引用或改写已有论文原文。"
+        "文章需要有研究背景、材料/方法、关键结果和局限或工程启示，语言难度中等，"
+        "使用准确的材料学术语和清晰的因果/转折关系。必须严格输出 JSON，不要 Markdown。"
+    )
+    last_error: Optional[Exception] = None
+    for attempt in range(_generation_attempt_limit()):
+        nonce = f"{random.randrange(10**9):09d}"
+        recent_summary = _history_prompt_summary(previous)
+        user_message = (
+            f"请生成一段全新的材料学英文文献，目标方向：{requested_field or '材料科学与工程（从常见方向中随机选择）'}。\n"
+            "正文约 130–180 个英文单词，标题简洁。返回字段：title、field、text、terms（至少8个英文术语）、"
+            "reference_translation（中文参考译文）。不要生成与以下历史材料相同或高度相似的标题、主题、句式或数据：\n"
+            f"{recent_summary}\n本次生成随机标识：{nonce}。"
+        )
+        candidate: Optional[dict] = None
+        try:
+            response = _call_generation_model(system_prompt, user_message, model=model)
+            candidate = _normalise_generated_material(
+                _parse_generation_json(response.get("content") if isinstance(response, dict) else response),
+                requested_field=requested_field,
+            )
+            if _is_duplicate_material(candidate, previous):
+                raise ValueError("模型生成了重复或高度相似的文献")
+            _record_material(candidate)
+            return candidate
+        except Exception as exc:
+            last_error = exc
+            # Keep the rejected candidate/history in the next prompt and ask
+            # for a genuinely different angle on the next attempt.
+            if candidate:
+                previous.append(candidate)
+            continue
+    detail = str(last_error or "未知错误").strip()
+    raise MaterialGenerationError(
+        "AI 文献生成暂时失败，未返回可用且不重复的材料。"
+        "请稍后重试；若持续出现，请检查硅基流动模型状态和额度。"
+        f"（{detail[:160]}）"
+    ) from last_error
+
+
+def get_unseen_fallback_material(
+    field: str = "", exclude_materials: Optional[Iterable[object]] = None
+) -> dict:
+    """Return an unused bundled article for an API-outage fallback.
+
+    The selected direction is kept strict.  If every bundled article in that
+    direction has already been used, raise instead of silently repeating one.
+    """
+    previous = _read_material_history()
+    previous.extend(_as_material_records(exclude_materials))
     candidates = [
-        item for item in MATERIALS
-        if (not field or item["field"] == field) and item["id"] != exclude_id
+        item
+        for item in MATERIALS
+        if (not field or item["field"] == field) and not _is_duplicate_material(item, previous)
     ]
     if not candidates:
-        candidates = [item for item in MATERIALS if not field or item["field"] == field]
+        raise MaterialGenerationError(
+            f"“{field or '材料科学与工程'}”方向的备用材料已经用完，且 AI 暂时不可用；请稍后重试。"
+        )
+    return dict(random.choice(candidates))
+
+
+def create_material(
+    field: str = "",
+    exclude_materials: Optional[Iterable[object]] = None,
+    model: Optional[str] = None,
+) -> dict:
+    """Generate a fresh AI article, with a strict no-repeat local fallback."""
+    try:
+        return generate_material(field=field, exclude_materials=exclude_materials, model=model)
+    except MaterialGenerationError as generation_error:
+        fallback = get_unseen_fallback_material(field=field, exclude_materials=exclude_materials)
+        fallback["source"] = "local-fallback"
+        fallback["generation_error"] = str(generation_error)
+        return fallback
+
+
+def get_random_material(
+    exclude_id: str = "",
+    field: str = "",
+    exclude_ids: Optional[Iterable[str]] = None,
+    exclude_fingerprints: Optional[Iterable[str]] = None,
+) -> dict:
+    """按方向随机返回本地材料，可排除当前会话已使用的材料。"""
+    blocked_ids = {str(item) for item in (exclude_ids or []) if item}
+    if exclude_id:
+        blocked_ids.add(str(exclude_id))
+    blocked_fingerprints = {str(item) for item in (exclude_fingerprints or []) if item}
+    candidates = [
+        item for item in MATERIALS
+        if (not field or item["field"] == field)
+        and item["id"] not in blocked_ids
+        and material_fingerprint(item) not in blocked_fingerprints
+    ]
+    if not candidates:
+        candidates = [
+            item for item in MATERIALS
+            if (not field or item["field"] == field)
+            and (not blocked_ids or item["id"] not in blocked_ids)
+        ]
+    if not candidates:
+        # If a single direction has been exhausted, prefer an unseen article
+        # from another direction rather than returning the same article again.
+        candidates = [
+            item
+            for item in MATERIALS
+            if item["id"] not in blocked_ids
+            and material_fingerprint(item) not in blocked_fingerprints
+        ]
     if not candidates:
         candidates = list(MATERIALS)
     return dict(random.choice(candidates))

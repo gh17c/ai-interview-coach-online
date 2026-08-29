@@ -23,6 +23,15 @@ from modules.api_client import _get_client
 
 
 DEFAULT_STT_MODEL = "FunAudioLLM/SenseVoiceSmall"
+# SiliconFlow occasionally returns an empty HTTP 503 while a speech model is
+# being moved between inference workers.  Keep the original model as the
+# first choice for compatibility, but allow a second model to take over in
+# the same recording attempt.  The list is configurable in .env so users can
+# choose models available to their account.
+DEFAULT_STT_FALLBACK_MODELS = (
+    "Qwen/Qwen3-ASR-1.7B",
+    "XingChenAGI/XingChenASR-V3.2",
+)
 _AUDIO_RECORDER_COMPONENT = None
 
 
@@ -436,6 +445,8 @@ def _log_audio_event(
     started: float,
     status: str,
     text_length: int = 0,
+    error_status_code: Optional[int] = None,
+    error_type: str = "",
 ) -> None:
     """Record non-sensitive audio diagnostics for troubleshooting."""
     try:
@@ -463,6 +474,8 @@ def _log_audio_event(
                         "track_muted": stats.get("track_muted", False),
                         "audio_processing": stats.get("processing", {}),
                         "text_length": text_length,
+                        **({"error_status_code": error_status_code} if error_status_code else {}),
+                        **({"error_type": error_type} if error_type else {}),
                     },
                     ensure_ascii=False,
                 )
@@ -522,6 +535,32 @@ def _stt_retry_limit() -> int:
         return 3
 
 
+def _stt_model_candidates(primary_model: Optional[str] = None) -> list[str]:
+    """Return the primary STT model followed by unique configured fallbacks.
+
+    SiliconFlow model availability can vary by account and region.  Reading
+    this setting for every recording (rather than at import time) also makes
+    it possible to change ``.env`` and restart only the Streamlit process.
+    Set ``SILICONFLOW_STT_FALLBACK_MODELS=`` to disable failover explicitly.
+    """
+    primary = str(
+        primary_model
+        or os.getenv("SILICONFLOW_STT_MODEL", DEFAULT_STT_MODEL)
+        or DEFAULT_STT_MODEL
+    ).strip()
+    configured = os.getenv("SILICONFLOW_STT_FALLBACK_MODELS")
+    if configured is None:
+        fallback_values = list(DEFAULT_STT_FALLBACK_MODELS)
+    else:
+        fallback_values = re.split(r"[,;\n]", configured)
+    candidates: list[str] = []
+    for value in [primary, *fallback_values]:
+        model = str(value or "").strip()
+        if model and model not in candidates:
+            candidates.append(model)
+    return candidates or [DEFAULT_STT_MODEL]
+
+
 def _create_transcription_with_retry(client, request_kwargs: dict):
     """Call the STT endpoint with bounded retry/backoff for transient errors."""
     retry_limit = _stt_retry_limit()
@@ -560,7 +599,8 @@ def transcribe_audio(
     safe_filename = Path(filename or "answer.wav").name
     if not safe_filename.lower().endswith((".wav", ".mp3", ".m4a", ".webm", ".mp4", ".ogg")):
         safe_filename = "answer.wav"
-    model = os.getenv("SILICONFLOW_STT_MODEL", DEFAULT_STT_MODEL)
+    model_candidates = _stt_model_candidates()
+    model = model_candidates[0]
     language = "en" if str(language).lower().startswith("en") else "zh"
     stats = audio_signal_stats(audio_bytes)
     # MediaRecorder normally returns WebM, which the WAV parser cannot inspect.
@@ -646,7 +686,6 @@ def transcribe_audio(
     }.get(suffix, "audio/wav")
 
     request_kwargs = {
-        "model": model,
         "file": (safe_filename, audio_bytes, mime_type),
         "language": language,
         "response_format": "json",
@@ -658,29 +697,59 @@ def transcribe_audio(
         # older SiliconFlow deployments working if they reject the field.
         request_kwargs["prompt"] = stt_prompt
 
+    response = None
+    used_model = model
+    last_error: Optional[Exception] = None
+    attempted_models: list[str] = []
     try:
         client = _get_client()
-        try:
-            response = _create_transcription_with_retry(client, request_kwargs)
-        except Exception as exc:
-            if "prompt" in request_kwargs and _prompt_argument_unsupported(exc):
-                request_kwargs.pop("prompt", None)
-                response = _create_transcription_with_retry(client, request_kwargs)
-            else:
-                raise
+        for candidate_model in model_candidates:
+            attempted_models.append(candidate_model)
+            candidate_kwargs = dict(request_kwargs)
+            candidate_kwargs["model"] = candidate_model
+            try:
+                try:
+                    response = _create_transcription_with_retry(client, candidate_kwargs)
+                except Exception as exc:
+                    # Some OpenAI-compatible gateways reject the optional
+                    # prompt field.  Retry this same model once without the
+                    # hint before considering it unavailable.
+                    if "prompt" in candidate_kwargs and _prompt_argument_unsupported(exc):
+                        candidate_kwargs.pop("prompt", None)
+                        response = _create_transcription_with_retry(client, candidate_kwargs)
+                    else:
+                        raise
+                used_model = candidate_model
+                break
+            except Exception as exc:
+                last_error = exc
+                # A fallback model is useful only for transient provider
+                # failures.  Preserve validation/authentication errors so the
+                # caller receives the real configuration problem.
+                if not _is_retryable_transcription_error(exc):
+                    raise
+                continue
+        if response is None and last_error is not None:
+            raise last_error
+        if response is None:
+            raise RuntimeError("语音识别没有返回响应")
     except Exception as exc:
         _log_audio_event(
-            model=model,
+            model=used_model,
             audio_bytes=audio_bytes,
             stats=stats,
             started=started,
             status="api_error",
+            error_status_code=_error_status_code(exc),
+            error_type=type(exc).__name__,
         )
         status_code = _error_status_code(exc)
         if status_code in {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524}:
+            models_label = "、".join(attempted_models) or model
             raise VoiceCaptureError(
                 f"语音识别服务暂时不可用（HTTP {status_code}）。已自动重试 {_stt_retry_limit()} 次，"
-                "请稍等片刻后重新录音；如果持续出现，请在硅基流动控制台检查模型状态和额度。"
+                f"并尝试备用模型（{models_label}）。请稍等片刻后重新录音；"
+                "如果持续出现，请在硅基流动控制台检查模型状态、额度和网络连接。"
             ) from exc
         raise
     text = getattr(response, "text", "")
@@ -691,7 +760,7 @@ def transcribe_audio(
 
     # 只记录耗时、大小和音量诊断，不记录录音内容。
     _log_audio_event(
-        model=model,
+        model=used_model,
         audio_bytes=audio_bytes,
         stats=stats,
         started=started,

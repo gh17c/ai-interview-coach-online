@@ -30,7 +30,15 @@ from modules.evaluator import evaluate_answer, generate_full_report
 from modules.history import save_session, list_sessions, load_session, delete_session, log_pool_generation
 from modules.knowledge_base import get_random_insights
 from modules.voice import VoiceCaptureError, audio_recorder, transcribe_audio
-from modules.literature_interview import get_random_material, list_material_fields, score_reading, evaluate_translation
+from modules.literature_interview import (
+    MaterialGenerationError,
+    create_material,
+    get_random_material,
+    list_material_fields,
+    material_fingerprint,
+    score_reading,
+    evaluate_translation,
+)
 
 
 st.set_page_config(page_title="AI 学术面试教练", page_icon="🎓", layout="wide")
@@ -50,6 +58,9 @@ DEFAULTS = {
     "smart_import_processed_id": "",
     "lit_material": None,
     "lit_selected_field": "",
+    "lit_used_materials": [],
+    "lit_material_source": "",
+    "lit_generation_error": "",
     "lit_stage": "reading",
     "lit_reading_result": None,
     "lit_translation_result": None,
@@ -83,7 +94,15 @@ except Exception:
     launch_mode = ""
 if launch_mode == "literature_translation" and st.session_state.page == "profile":
     st.session_state.mode = "literature_translation"
-    st.session_state.lit_material = get_random_material()
+    try:
+        st.session_state.lit_material = create_material()
+    except MaterialGenerationError:
+        # A desktop shortcut has no direction selector.  Keep it usable when
+        # the provider is briefly unavailable by using an unseen bundled item.
+        st.session_state.lit_material = get_random_material()
+    st.session_state.lit_used_materials = [st.session_state.lit_material]
+    st.session_state.lit_material_source = st.session_state.lit_material.get("source", "library")
+    st.session_state.lit_generation_error = str(st.session_state.lit_material.get("generation_error") or "")
     st.session_state.lit_stage = "reading"
     st.session_state.lit_reading_result = None
     st.session_state.lit_translation_result = None
@@ -422,6 +441,38 @@ def _reset_literature_voice() -> None:
     st.session_state.lit_voice_transcript_meta = {}
     st.session_state.lit_voice_duration = 0.0
     st.session_state.lit_voice_recorded = False
+
+
+def _remember_literature_material(material: Optional[dict]) -> None:
+    """Keep the current-session article list for strict no-repeat prompts."""
+    if not isinstance(material, dict):
+        return
+    fingerprint = material_fingerprint(material)
+    materials = st.session_state.get("lit_used_materials") or []
+    if not any(
+        isinstance(item, dict)
+        and (
+            item.get("id") == material.get("id")
+            or material_fingerprint(item) == fingerprint
+        )
+        for item in materials
+    ):
+        materials.append(material)
+    # Keep Streamlit session payloads small while retaining enough context for
+    # the duplicate detector and the model's exclusion summary.
+    st.session_state.lit_used_materials = materials[-80:]
+
+
+def _create_literature_material(field: str = "") -> dict:
+    """Generate a new article and remember it for this interview session."""
+    material = create_material(
+        field=field,
+        exclude_materials=st.session_state.get("lit_used_materials") or [],
+    )
+    _remember_literature_material(material)
+    st.session_state.lit_material_source = str(material.get("source") or "library")
+    st.session_state.lit_generation_error = str(material.get("generation_error") or "")
+    return material
 
 
 def _render_countdown(deadline: float) -> Optional[dict]:
@@ -800,29 +851,36 @@ def render_mode_select_page():
 
     st.divider()
     st.markdown("### 📚 英文文献翻译面试")
-    st.caption("模拟预推免常见的英文文献环节：朗读材料、准备一分钟、中文口译并获得专业评价。")
+    st.caption("模拟预推免常见的英文文献环节：朗读材料、准备一分钟、中文口译并获得专业评价。点击开始后，AI 会按所选方向即时生成一篇全新材料。")
     field_options = ["全部方向", *list_material_fields()]
     selected_field_label = st.selectbox(
         "选择材料方向",
         field_options,
         index=field_options.index(st.session_state.get("lit_selected_field") or "全部方向"),
         key="lit_field_selector",
-        help="选择后将从对应方向的材料中随机抽取题目。",
+        help="选择方向后点击开始，AI 将即时生成该方向的原创英文材料；同一会话和历史记录会自动去重。",
     )
     st.session_state.lit_selected_field = "" if selected_field_label == "全部方向" else selected_field_label
     if st.button("📚 开始英文文献翻译面试", type="primary", use_container_width=True):
-        st.session_state.mode = "literature_translation"
-        st.session_state.lit_material = get_random_material(field=st.session_state.lit_selected_field)
-        st.session_state.lit_stage = "reading"
-        st.session_state.lit_reading_result = None
-        st.session_state.lit_translation_result = None
-        st.session_state.lit_submitted_translation = ""
-        st.session_state.lit_submitted_raw_translation = ""
-        st.session_state.lit_deadline = 0.0
-        st.session_state.lit_saved = False
-        _reset_literature_voice()
-        st.session_state.page = "interview"
-        st.rerun()
+        with st.spinner("🤖 正在生成该方向的全新英文文献…"):
+            try:
+                material = _create_literature_material(st.session_state.lit_selected_field)
+            except MaterialGenerationError as exc:
+                st.error(str(exc))
+                material = None
+        if material:
+            st.session_state.mode = "literature_translation"
+            st.session_state.lit_material = material
+            st.session_state.lit_stage = "reading"
+            st.session_state.lit_reading_result = None
+            st.session_state.lit_translation_result = None
+            st.session_state.lit_submitted_translation = ""
+            st.session_state.lit_submitted_raw_translation = ""
+            st.session_state.lit_deadline = 0.0
+            st.session_state.lit_saved = False
+            _reset_literature_voice()
+            st.session_state.page = "interview"
+            st.rerun()
 
 
 def render_literature_translation():
@@ -841,7 +899,14 @@ def render_literature_translation():
             pass
         st.rerun()
     st.title("📚 预推免英文文献翻译面试")
-    st.caption(f"材料方向：{material['field']} · 难度：中等 · 原创训练材料")
+    source = str(material.get("source") or "library")
+    source_label = "AI 即时生成" if source == "ai" else "本地备用材料"
+    st.caption(f"材料方向：{material['field']} · 难度：{material.get('difficulty', '中等')} · {source_label}")
+    if st.session_state.get("lit_generation_error"):
+        st.info(
+            "AI 文献服务暂时不可用，本次使用了该方向未重复的本地备用材料；"
+            "下一次开始或点击“再来一篇”会继续尝试 AI 生成。"
+        )
     st.progress({"reading": 0.25, "countdown": 0.5, "translation": 0.75, "result": 1.0}.get(stage, 0.25))
 
     if stage == "reading":
@@ -970,18 +1035,24 @@ def render_literature_translation():
         with st.expander("参考译文"):
             st.write(result["reference_translation"])
     if st.button("🔄 再来一篇", type="primary", use_container_width=True):
-        st.session_state.lit_material = get_random_material(
-            exclude_id=material["id"],
-            field=st.session_state.get("lit_selected_field", ""),
-        )
-        st.session_state.lit_stage = "reading"
-        st.session_state.lit_reading_result = None
-        st.session_state.lit_translation_result = None
-        st.session_state.lit_submitted_translation = ""
-        st.session_state.lit_submitted_raw_translation = ""
-        st.session_state.lit_saved = False
-        _reset_literature_voice()
-        st.rerun()
+        with st.spinner("🤖 正在生成下一篇不重复的英文文献…"):
+            try:
+                next_material = _create_literature_material(
+                    st.session_state.get("lit_selected_field", "")
+                )
+            except MaterialGenerationError as exc:
+                st.error(str(exc))
+                next_material = None
+        if next_material:
+            st.session_state.lit_material = next_material
+            st.session_state.lit_stage = "reading"
+            st.session_state.lit_reading_result = None
+            st.session_state.lit_translation_result = None
+            st.session_state.lit_submitted_translation = ""
+            st.session_state.lit_submitted_raw_translation = ""
+            st.session_state.lit_saved = False
+            _reset_literature_voice()
+            st.rerun()
 
 
 def _render_top_bar():
