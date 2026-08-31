@@ -166,6 +166,8 @@ def generate_full_report(
         "- 回答过短（<50字）必须体现在扣分和反馈中\n"
         "- 每个维度分数必须能拉开差距，不要全都70-80"
     )
+    if scenario.get("evaluation_focus"):
+        system_prompt += "\n\n## 当前场景的额外评分重点\n" + scenario["evaluation_focus"]
 
     dim_list = "、".join(dimensions)
 

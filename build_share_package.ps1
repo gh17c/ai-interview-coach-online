@@ -9,6 +9,7 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $Root "app.py") -Destination $Out -Force
 Copy-Item -LiteralPath (Join-Path $Root "app_ui.py") -Destination $Out -Force
+Copy-Item -LiteralPath (Join-Path $Root "app_ui.css") -Destination $Out -Force
 Copy-Item -LiteralPath (Join-Path $Root "requirements.txt") -Destination $Out -Force
 Copy-Item -LiteralPath (Join-Path $Root ".env.example") -Destination $Out -Force
 Copy-Item -LiteralPath (Join-Path $Root "README.md") -Destination $Out -Force

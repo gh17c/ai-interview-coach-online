@@ -8,6 +8,7 @@ import json
 import os
 import uuid
 from datetime import datetime
+from typing import Optional
 
 SESSIONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sessions")
 
@@ -39,7 +40,7 @@ def save_session(session_data: dict) -> str:
     return session_id
 
 
-def load_session(session_id: str) -> dict | None:
+def load_session(session_id: str) -> Optional[dict]:
     """加载指定会话，不存在返回 None"""
     filepath = os.path.join(SESSIONS_DIR, f"{session_id}.json")
     if not os.path.exists(filepath):

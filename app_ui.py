@@ -11,6 +11,7 @@ import random
 import hashlib
 import json
 import math
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
@@ -41,6 +42,71 @@ from modules.literature_interview import (
 
 
 st.set_page_config(page_title="AI 学术面试教练", page_icon="🎓", layout="wide")
+
+
+def _inject_ui_styles() -> None:
+    """Load the shared visual system without coupling the app to a theme file."""
+    css_path = Path(__file__).resolve().with_name("app_ui.css")
+    try:
+        css = css_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        css = ""
+    if css:
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+
+def _render_coach_topbar() -> None:
+    """Render a compact, consistent product header above every page."""
+    page_context = {
+        "profile": "构建画像",
+        "mode_select": "选择训练模式",
+        "interview": "模拟进行中",
+        "report": "面试复盘",
+        "history_list": "历史记录",
+        "history_detail": "历史详情",
+    }.get(st.session_state.get("page", "profile"), "预推免训练工作台")
+    st.markdown(
+        f"""
+        <div class="coach-topbar">
+          <div class="coach-brand">
+            <div class="coach-brand-mark" aria-hidden="true">⌬</div>
+            <div>
+              <div class="coach-brand-name">AI 学术面试教练</div>
+              <div class="coach-brand-subtitle">预推免训练工作台 · 语音与文字双通道</div>
+            </div>
+          </div>
+          <div class="coach-topbar-context">{page_context}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_workflow_rail(active_step: int = 1) -> None:
+    """Show the four-step journey used by the profile and mode pages."""
+    steps = (
+        ("画像", "建立你的面试画像"),
+        ("题库", "生成个性化题库"),
+        ("模拟", "完成真实面试训练"),
+        ("复盘", "查看评分与改进建议"),
+    )
+    html = ['<div class="coach-flow-rail"><div class="coach-flow-title">当前面试流程</div>']
+    for index, (name, description) in enumerate(steps, start=1):
+        active_class = " is-active" if index == active_step else ""
+        html.append(
+            f'<div class="coach-flow-step{active_class}">'
+            f'<div class="coach-flow-index">{index}</div>'
+            f'<div><div class="coach-flow-name">{name}</div>'
+            f'<div class="coach-flow-desc">{description}</div></div></div>'
+        )
+    html.append(
+        '<div class="coach-tip"><strong>💡 实用提示</strong>'
+        '信息越完整，AI 对你的了解越准确，生成的题目与建议也越贴合你的背景与目标。</div></div>'
+    )
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+_inject_ui_styles()
 
 DEFAULTS = {
     "page": "profile", "mode": None, "scenario_key": "pre_recommendation",
@@ -123,7 +189,12 @@ if launch_mode == "literature_translation" and st.session_state.page == "profile
 
 
 with st.sidebar:
-    st.title("🎓 AI 学术面试教练")
+    st.markdown(
+        '<div class="coach-brand"><div class="coach-brand-mark">⌬</div>'
+        '<div><div class="coach-brand-name" style="color:#fff">AI 学术面试教练</div>'
+        '<div class="coach-brand-subtitle" style="color:rgba(255,255,255,.66)">预推免训练工作台</div></div></div>',
+        unsafe_allow_html=True,
+    )
     st.divider()
 
     # 使用按钮代替 radio——按钮是主动点击才触发，不会在每次rerun时自动复位
@@ -599,7 +670,20 @@ def _render_latest_speech(text_override: str = ""):
 
 
 def render_profile_page():
-    st.title("📋 构建你的面试画像")
+    active_step = 1 if st.session_state.get("profile_step", "fill") == "fill" else 2
+    intro_col, rail_col = st.columns([3.15, 1.05], gap="large")
+    with intro_col:
+        st.markdown(
+            """
+            <div class="coach-page-intro">
+              <h1>构建你的面试画像</h1>
+              <p>完善以下信息，AI 将为你生成个性化面试题库与复盘建议。越具体，后续问题越贴合你的经历。</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with rail_col:
+        _render_workflow_rail(active_step)
     if st.session_state.get("lit_generation_error"):
         st.warning(
             "文献翻译快捷入口暂时无法开始："
@@ -670,7 +754,7 @@ def render_profile_page():
                     st.error(f"❌ 解析失败：{e}")
 
     st.divider()
-    st.markdown("填写以下信息，AI 将为你生成**个性化面试题库**。越详细，题目越有针对性。")
+    st.markdown('<p class="coach-section-caption">带 * 的字段为必填项；你可以先导入简历，再检查和补充内容。</p>', unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -834,94 +918,123 @@ def render_profile_page():
 
 
 def render_mode_select_page():
-    st.title("🎯 选择面试模式")
+    st.markdown(
+        """
+        <div class="coach-page-intro">
+          <h1>选择训练模式</h1>
+          <p>根据你的备考目标，选择一条适合自己的训练路径。每种模式都会保留完整的练习记录。</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if st.button("← 返回修改画像"):
         st.session_state.page = "profile"
         st.rerun()
     scenario = get_scenario(st.session_state.scenario_key)
     profile = st.session_state.profile or {}
-    st.info(
-        f"🎓 **{scenario['name']}** · {profile.get('target_school', '')} · "
-        f"{profile.get('discipline', profile.get('target_major', ''))}  |  "
-        f"题库已备好：共 **{sum(len(v) for v in st.session_state.question_pool.values())}** 题"
+    question_total = sum(len(v) for v in (st.session_state.question_pool or {}).values())
+    st.markdown(
+        f"<div class=\"coach-context-bar\"><strong>{scenario['name']}</strong>"
+        f"<span>·</span><span>{profile.get('target_school', '') or '目标院校未填写'}</span>"
+        f"<span>·</span><span>{profile.get('discipline', profile.get('target_major', '')) or '材料相关方向'}</span>"
+        f"<span>·</span><span>个性化题库 {question_total} 题</span></div>",
+        unsafe_allow_html=True,
     )
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        ### 🎬 全模拟面试
-        真实面试流程，AI 逐题提问并根据你的回答**动态追问**。
-        - 🔄 逐维度推进
-        - 🎯 AI 根据回答质量智能追问（1-2轮）
-        - 📊 终场生成**完整诊断报告**
-        - ⏱ 约 25-30 分钟
-        """)
-        if st.button("🎬 开始全模拟面试", type="primary", use_container_width=True):
-            st.session_state.mode = "full_simulation"
-            st.session_state.messages = []
-            st.session_state.used_question_ids = set()
-            st.session_state.interview_state = {
-                "current_dim_idx": 0, "current_q_idx": 0,
-                "follow_up_round": 0, "phase": "opening",
-            }
-            st.session_state.report = None
-            st.session_state.page = "interview"
-            with st.spinner("🤖 面试官准备中..."):
-                opening = start_interview(st.session_state.scenario_key, profile)
-                st.session_state.messages.append({
-                    "role": "interviewer", "content": opening,
-                    "dimension": None, "is_followup": False,
-                })
-            st.rerun()
-    with col2:
-        st.markdown("""
-        ### 🎯 单题练习
-        自由选题，每道题答完**即时获取评估**。
-        - 🎲 随机从题库抽题，自由选择维度
-        - 📊 提交后立即获得：评分 + 优缺点 + 示范回答
-        - 🔗 提供**追问方向建议**
-        - ⏱ 每道题约 5 分钟 · 不限次数
-        """)
-        if st.button("🎯 开始单题练习", type="primary", use_container_width=True):
-            st.session_state.mode = "single_practice"
-            st.session_state.messages = []
-            st.session_state.used_question_ids = set()
-            st.session_state.single_practice_dim = None
-            st.session_state.single_practice_count = 0
-            st.session_state.page = "interview"
-            st.rerun()
-
-    st.divider()
-    st.markdown("### 📚 英文文献翻译面试")
-    st.caption("模拟预推免常见的英文文献环节：朗读材料、准备一分钟、中文口译并获得专业评价。点击开始后，AI 会按所选方向即时生成一篇全新材料。")
-    field_options = ["全部方向", *list_material_fields()]
-    selected_field_label = st.selectbox(
-        "选择材料方向",
-        field_options,
-        index=field_options.index(st.session_state.get("lit_selected_field") or "全部方向"),
-        key="lit_field_selector",
-        help="选择方向后点击开始，AI 将即时生成该方向的原创英文材料；同一会话和历史记录会自动去重。",
-    )
-    st.session_state.lit_selected_field = "" if selected_field_label == "全部方向" else selected_field_label
-    if st.button("📚 开始英文文献翻译面试", type="primary", use_container_width=True):
-        with st.spinner("🤖 正在生成该方向的全新英文文献…"):
-            try:
-                material = _create_literature_material(st.session_state.lit_selected_field)
-            except MaterialGenerationError as exc:
-                st.error(str(exc))
-                material = None
-        if material:
-            st.session_state.mode = "literature_translation"
-            st.session_state.lit_material = material
-            st.session_state.lit_stage = "reading"
-            st.session_state.lit_reading_result = None
-            st.session_state.lit_translation_result = None
-            st.session_state.lit_submitted_translation = ""
-            st.session_state.lit_submitted_raw_translation = ""
-            st.session_state.lit_deadline = 0.0
-            st.session_state.lit_saved = False
-            _reset_literature_voice()
-            st.session_state.page = "interview"
-            st.rerun()
+    mode_cols = st.columns([1, 1, 1.32], gap="medium")
+    with mode_cols[0]:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="coach-card-heading"><div class="coach-card-icon">🎬</div>'
+                '<div><div class="coach-card-title">全模拟面试</div>'
+                '<div class="coach-card-subtitle">还原真实面试节奏</div></div></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<p class="coach-card-note">AI 逐题提问，并根据你的回答进行动态追问，最后生成完整诊断报告。</p>'
+                '<ul class="coach-feature-list"><li>逐维度推进，覆盖整场流程</li>'
+                '<li>根据回答质量智能追问 1–2 轮</li><li>终场生成完整诊断报告</li></ul>',
+                unsafe_allow_html=True,
+            )
+            if st.button("🎬 开始全模拟面试", type="primary", use_container_width=True, key="start_full_simulation"):
+                st.session_state.mode = "full_simulation"
+                st.session_state.messages = []
+                st.session_state.used_question_ids = set()
+                st.session_state.interview_state = {
+                    "current_dim_idx": 0, "current_q_idx": 0,
+                    "follow_up_round": 0, "phase": "opening",
+                }
+                st.session_state.report = None
+                st.session_state.page = "interview"
+                with st.spinner("🤖 面试官准备中..."):
+                    opening = start_interview(st.session_state.scenario_key, profile)
+                    st.session_state.messages.append({
+                        "role": "interviewer", "content": opening,
+                        "dimension": None, "is_followup": False,
+                    })
+                st.rerun()
+    with mode_cols[1]:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="coach-card-heading"><div class="coach-card-icon">🎯</div>'
+                '<div><div class="coach-card-title">单题练习</div>'
+                '<div class="coach-card-subtitle">快速巩固薄弱环节</div></div></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<p class="coach-card-note">自由选择维度，每道题回答后即时获得评分、优缺点与示范回答。</p>'
+                '<ul class="coach-feature-list"><li>从题库随机抽题</li>'
+                '<li>提交后立即获得详细评估</li><li>提供下一步追问方向建议</li></ul>',
+                unsafe_allow_html=True,
+            )
+            if st.button("🎯 开始单题练习", type="primary", use_container_width=True, key="start_single_practice"):
+                st.session_state.mode = "single_practice"
+                st.session_state.messages = []
+                st.session_state.used_question_ids = set()
+                st.session_state.single_practice_dim = None
+                st.session_state.single_practice_count = 0
+                st.session_state.page = "interview"
+                st.rerun()
+    with mode_cols[2]:
+        with st.container(border=True):
+            st.markdown(
+                '<div class="coach-card-heading"><div class="coach-card-icon is-amber">📚</div>'
+                '<div><div class="coach-card-title">文献翻译面试</div>'
+                '<div class="coach-card-subtitle">朗读、准备、口译、复盘</div></div></div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<p class="coach-card-note">选择材料方向后，AI 即时生成一篇不重复的英文材料，模拟预推免文献翻译环节。</p>',
+                unsafe_allow_html=True,
+            )
+            field_options = ["全部方向", *list_material_fields()]
+            selected_field_label = st.selectbox(
+                "材料方向",
+                field_options,
+                index=field_options.index(st.session_state.get("lit_selected_field") or "全部方向"),
+                key="lit_field_selector",
+                help="选择方向后点击开始，AI 将即时生成该方向的原创英文材料；同一会话和历史记录会自动去重。",
+            )
+            st.session_state.lit_selected_field = "" if selected_field_label == "全部方向" else selected_field_label
+            if st.button("📚 开始文献翻译面试", type="primary", use_container_width=True, key="start_literature_translation"):
+                with st.spinner("🤖 正在生成该方向的全新英文文献…"):
+                    try:
+                        material = _create_literature_material(st.session_state.lit_selected_field)
+                    except MaterialGenerationError as exc:
+                        st.error(str(exc))
+                        material = None
+                if material:
+                    st.session_state.mode = "literature_translation"
+                    st.session_state.lit_material = material
+                    st.session_state.lit_stage = "reading"
+                    st.session_state.lit_reading_result = None
+                    st.session_state.lit_translation_result = None
+                    st.session_state.lit_submitted_translation = ""
+                    st.session_state.lit_submitted_raw_translation = ""
+                    st.session_state.lit_deadline = 0.0
+                    st.session_state.lit_saved = False
+                    _reset_literature_voice()
+                    st.session_state.page = "interview"
+                    st.rerun()
 
 
 def render_literature_translation():
@@ -1723,6 +1836,7 @@ def render_interview_page():
 
 
 def render_page():
+    _render_coach_topbar()
     page = st.session_state.page
     if page == "profile":
         render_profile_page()

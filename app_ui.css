@@ -1,0 +1,483 @@
+/* AI 学术面试教练 — shared product UI tokens */
+:root {
+  --coach-navy: #0a2347;
+  --coach-navy-deep: #071b38;
+  --coach-blue: #155eef;
+  --coach-blue-soft: #eef4ff;
+  --coach-amber: #c98932;
+  --coach-amber-soft: #fff7e8;
+  --coach-ink: #17253d;
+  --coach-muted: #667085;
+  --coach-line: #e4e9f2;
+  --coach-surface: #ffffff;
+  --coach-canvas: #f5f7fb;
+  --coach-radius: 16px;
+  --coach-shadow: 0 12px 30px rgba(16, 37, 70, 0.07);
+}
+
+/* Keep Streamlit's chrome quiet so the product shell carries the hierarchy. */
+[data-testid="stAppViewContainer"] {
+  background: var(--coach-canvas);
+}
+
+[data-testid="stHeader"] {
+  background: transparent;
+}
+
+[data-testid="stToolbar"] {
+  right: 0.75rem;
+}
+
+[data-testid="stDecoration"],
+#MainMenu,
+footer {
+  display: none;
+}
+
+/* The hosted-app deploy control is useful to an owner but distracting to
+   candidates; deployment remains available from the hosting dashboard. */
+[data-testid="stAppDeployButton"] {
+  display: none;
+}
+
+[data-testid="stMainBlockContainer"] {
+  max-width: 1440px;
+  padding: 1.45rem 2.2rem 3.5rem;
+}
+
+/* Left rail */
+[data-testid="stSidebar"] {
+  background: var(--coach-navy);
+  border-right: 0;
+}
+
+[data-testid="stSidebar"] > div:first-child {
+  padding: 1.1rem 0.85rem;
+}
+
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+  color: #f8fbff;
+}
+
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+[data-testid="stSidebar"] hr {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] button {
+  justify-content: flex-start;
+  min-height: 2.8rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.84);
+  box-shadow: none;
+}
+
+[data-testid="stSidebar"] [data-testid="stButton"] button:hover {
+  border-color: rgba(255, 255, 255, 0.17);
+  background: rgba(255, 255, 255, 0.09);
+  color: #ffffff;
+}
+
+/* Branded top bar rendered by app_ui.py */
+.coach-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.8rem;
+  margin: -0.35rem 0 1.15rem;
+  padding: 0.75rem 1.1rem;
+  border-bottom: 1px solid var(--coach-line);
+}
+
+.coach-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--coach-ink);
+}
+
+.coach-brand-mark {
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  place-items: center;
+  border-radius: 0.75rem;
+  background: var(--coach-navy);
+  color: #ffffff;
+  font-size: 1.25rem;
+  box-shadow: 0 6px 16px rgba(10, 35, 71, 0.18);
+}
+
+.coach-brand-name {
+  font-size: 1.05rem;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+
+.coach-brand-subtitle {
+  margin-top: 0.08rem;
+  color: var(--coach-muted);
+  font-size: 0.76rem;
+}
+
+.coach-topbar-context {
+  color: var(--coach-muted);
+  font-size: 0.8rem;
+  text-align: right;
+}
+
+/* Page intro and workflow rail */
+.coach-page-intro {
+  margin: 0.25rem 0 1.2rem;
+}
+
+.coach-page-intro h1 {
+  margin: 0;
+  color: var(--coach-ink);
+  font-size: clamp(1.8rem, 2.5vw, 2.55rem);
+  line-height: 1.16;
+  letter-spacing: -0.045em;
+}
+
+.coach-page-intro p {
+  max-width: 42rem;
+  margin: 0.55rem 0 0;
+  color: var(--coach-muted);
+  font-size: 0.98rem;
+  line-height: 1.65;
+}
+
+.coach-flow-rail {
+  height: 100%;
+  min-height: 16rem;
+  padding: 1.35rem 1.25rem;
+  border: 1px solid var(--coach-line);
+  border-radius: var(--coach-radius);
+  background: var(--coach-surface);
+  box-shadow: var(--coach-shadow);
+}
+
+.coach-flow-title {
+  margin: 0 0 1rem;
+  color: var(--coach-ink);
+  font-size: 1.02rem;
+  font-weight: 720;
+}
+
+.coach-flow-step {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.72rem;
+  position: relative;
+  min-height: 3.2rem;
+}
+
+.coach-flow-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 2rem;
+  left: 0.95rem;
+  height: 1.45rem;
+  border-left: 1px solid #cfd7e5;
+}
+
+.coach-flow-index {
+  display: grid;
+  width: 1.95rem;
+  height: 1.95rem;
+  place-items: center;
+  border: 1px solid #d9e1ee;
+  border-radius: 50%;
+  color: var(--coach-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.coach-flow-step.is-active .coach-flow-index {
+  border-color: var(--coach-blue);
+  background: var(--coach-blue);
+  color: white;
+}
+
+.coach-flow-name {
+  margin-top: 0.18rem;
+  color: var(--coach-ink);
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.coach-flow-desc {
+  margin-top: 0.1rem;
+  color: var(--coach-muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.coach-tip {
+  margin-top: 1.15rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--coach-line);
+  color: var(--coach-muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.coach-tip strong {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--coach-ink);
+  font-size: 0.85rem;
+}
+
+/* Surfaces */
+.coach-surface,
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-color: var(--coach-line) !important;
+  border-radius: var(--coach-radius) !important;
+  background: var(--coach-surface) !important;
+  box-shadow: var(--coach-shadow);
+}
+
+.coach-section-title {
+  margin: 0;
+  color: var(--coach-ink);
+  font-size: 1.15rem;
+  font-weight: 720;
+}
+
+.coach-section-caption {
+  margin: 0.25rem 0 0;
+  color: var(--coach-muted);
+  font-size: 0.83rem;
+}
+
+.coach-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.9rem 0 1.35rem;
+  padding: 0.72rem 0.9rem;
+  border: 1px solid #dce6f5;
+  border-radius: 0.8rem;
+  background: var(--coach-blue-soft);
+  color: #3c557a;
+  font-size: 0.85rem;
+}
+
+.coach-context-bar strong {
+  color: var(--coach-ink);
+}
+
+.coach-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.coach-card-icon {
+  display: grid;
+  width: 2.55rem;
+  height: 2.55rem;
+  place-items: center;
+  border-radius: 0.8rem;
+  background: var(--coach-blue-soft);
+  color: var(--coach-blue);
+  font-size: 1.25rem;
+}
+
+.coach-card-icon.is-amber {
+  background: #fff0cf;
+  color: #9b620f;
+}
+
+.coach-card-title {
+  color: var(--coach-ink);
+  font-size: 1.05rem;
+  font-weight: 720;
+}
+
+.coach-card-subtitle {
+  margin-top: 0.12rem;
+  color: var(--coach-muted);
+  font-size: 0.76rem;
+}
+
+.coach-feature-list {
+  min-height: 7.8rem;
+  margin: 0.65rem 0 1.15rem;
+  padding-left: 1.1rem;
+  color: var(--coach-muted);
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.coach-feature-list li::marker {
+  color: var(--coach-blue);
+}
+
+.coach-feature-list.is-amber li::marker {
+  color: var(--coach-amber);
+}
+
+.coach-card-note {
+  margin: 0.6rem 0 1rem;
+  color: var(--coach-muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+/* Inputs and buttons */
+[data-testid="stTextInput"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stSelectbox"] label,
+[data-testid="stNumberInput"] label,
+[data-testid="stFileUploader"] label {
+  color: var(--coach-ink);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+  border-color: #d8e0ec;
+  border-radius: 0.7rem;
+  background: #ffffff;
+  color: var(--coach-ink);
+}
+
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus,
+[data-testid="stNumberInput"] input:focus {
+  border-color: var(--coach-blue);
+  box-shadow: 0 0 0 1px var(--coach-blue);
+}
+
+[data-testid="stButton"] button {
+  min-height: 2.65rem;
+  border-radius: 0.7rem;
+  border: 1px solid #d1dbea;
+  background: #ffffff;
+  color: var(--coach-ink);
+  font-weight: 650;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+[data-testid="stButton"] button:hover {
+  border-color: #9bb4df;
+  box-shadow: 0 6px 16px rgba(21, 94, 239, 0.1);
+  transform: translateY(-1px);
+}
+
+[data-testid="stButton"] button[kind="primary"] {
+  border-color: var(--coach-blue);
+  background: var(--coach-blue);
+  color: #ffffff;
+  box-shadow: 0 7px 18px rgba(21, 94, 239, 0.2);
+}
+
+[data-testid="stButton"] button[kind="primary"]:hover {
+  border-color: #0d4ecf;
+  background: #0d4ecf;
+  box-shadow: 0 9px 22px rgba(21, 94, 239, 0.28);
+}
+
+/* Alerts, expanders and metrics */
+[data-testid="stAlert"] {
+  border-radius: 0.8rem;
+  border-width: 1px;
+}
+
+[data-testid="stExpander"] {
+  border-color: var(--coach-line);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+[data-testid="stMetric"] {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--coach-line);
+  border-radius: 0.85rem;
+  background: #ffffff;
+}
+
+[data-testid="stMetricLabel"] {
+  color: var(--coach-muted);
+}
+
+[data-testid="stMetricValue"] {
+  color: var(--coach-ink);
+}
+
+/* Literature mode receives a restrained amber treatment. */
+.literature-callout {
+  padding: 1.1rem 1.2rem;
+  border: 1px solid #efc982;
+  border-radius: var(--coach-radius);
+  background: var(--coach-amber-soft);
+}
+
+.literature-callout h3 {
+  margin: 0;
+  color: #7a4a0e;
+  font-size: 1.15rem;
+}
+
+.literature-callout p {
+  margin: 0.35rem 0 0;
+  color: #875f29;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+/* Interview/report content width and readable text rhythm. */
+[data-testid="stChatMessage"] {
+  border-radius: 0.9rem;
+  border: 1px solid var(--coach-line);
+  background: #ffffff;
+}
+
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li {
+  line-height: 1.65;
+}
+
+@media (max-width: 900px) {
+  [data-testid="stMainBlockContainer"] {
+    padding: 1rem 1rem 2.5rem;
+  }
+
+  .coach-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0;
+  }
+
+  .coach-topbar-context {
+    text-align: left;
+  }
+
+  .coach-flow-rail {
+    min-height: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

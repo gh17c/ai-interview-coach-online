@@ -4,7 +4,10 @@ __pycache__/
 data/sessions/*.json
 data/literature_material_history.jsonl
 data/literature_material_history.jsonl.lock
+data/api_calls.jsonl
 .streamlit/
+!.streamlit/
+!.streamlit/config.toml
 venv/
 .venv/
 env/

@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ai-interview-coach
+    runtime: docker
+    plan: free
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.siliconflow.cn/v1
+      - key: DEEPSEEK_MODEL
+        value: deepseek-ai/DeepSeek-V4-Flash
+      - key: SILICONFLOW_STT_MODEL
+        value: Qwen/Qwen3-ASR-1.7B
+      - key: SILICONFLOW_STT_FALLBACK_MODELS
+        value: FunAudioLLM/SenseVoiceSmall,XingChenAGI/XingChenASR-V3.2
+      - key: MODEL_MAX_OUTPUT_TOKENS
+        value: "512"
+      - key: MODEL_ENABLE_THINKING
+        value: "false"

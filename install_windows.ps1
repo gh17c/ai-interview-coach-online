@@ -27,7 +27,7 @@ Write-Host "Installing AI Interview Coach..." -ForegroundColor Cyan
 $python = Find-Python
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 
-$copyItems = @("app.py", "app_ui.py", "requirements.txt", ".env.example", "README.md", "start_literature_translation.bat", "modules", "components")
+$copyItems = @("app.py", "app_ui.py", "app_ui.css", "requirements.txt", ".env.example", "README.md", "start_literature_translation.bat", "modules", "components")
 foreach ($item in $copyItems) {
     $source = Join-Path $SourceRoot $item
     if (Test-Path $source) {

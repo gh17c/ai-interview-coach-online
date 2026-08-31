@@ -1,0 +1,16 @@
+.env
+.venv
+venv
+env
+__pycache__
+*.pyc
+.git
+.gitignore
+data/sessions
+data/api_calls.jsonl
+data/literature_material_history.jsonl
+data/literature_material_history.jsonl.lock
+dist
+build
+*.log
+tests

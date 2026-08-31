@@ -24,3 +24,19 @@ powershell -ExecutionPolicy Bypass -File .\build_share_package.ps1
 朗读材料、完成一分钟准备，再用中文语音口译并查看材料学术语评价。
 
 API Key 不应放进 zip 或发给好友。每位使用者都应使用自己的 Key，并自行承担模型调用费用。
+
+## 发布为网页
+
+如果希望好友直接通过浏览器访问，而不是安装本地程序，可以将仓库部署到 Render：
+
+1. 将项目推送到自己的 GitHub 仓库（不要提交 `.env`）。
+2. 在 Render 新建 Web Service，连接仓库并选择 Docker；项目里的 `render.yaml` 已提供默认配置。
+3. 在服务的 Environment 中添加自己的 `DEEPSEEK_API_KEY`，保存并等待部署完成。
+4. 把 Render 生成的 `https://…onrender.com` 地址发给好友即可。
+
+也可以在本机使用 Docker：
+
+```powershell
+docker build -t ai-interview-coach .
+docker run --rm -p 8501:8501 --env-file .env ai-interview-coach
+```

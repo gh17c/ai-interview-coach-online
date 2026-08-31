@@ -51,6 +51,23 @@ Windows 分享与安装说明见 [SHARING.md](SHARING.md)。运行 `build_share_
 
 安装脚本会同时创建「AI Interview Coach」和「文献阅读翻译模拟」两个桌面快捷方式；后者双击后直接打开英文文献翻译环节。
 
+### 发布成可直接访问的网页
+
+项目现在同时提供了容器化网页入口：`Dockerfile`、`.streamlit/config.toml` 和 `render.yaml`。
+部署到 Render 时，直接连接 GitHub 仓库并选择 `render.yaml`，然后在环境变量中填写自己的
+`DEEPSEEK_API_KEY`；模型和语音识别默认已指向硅基流动。部署完成后，Render 会提供一个可分享的
+`https://…onrender.com` 地址，好友无需安装 Python 或运行代码，直接用浏览器打开即可。
+
+本机也可以用 Docker 启动：
+
+```powershell
+docker build -t ai-interview-coach .
+docker run --rm -p 8501:8501 --env-file .env ai-interview-coach
+```
+
+然后打开 <http://localhost:8501>。不要把 `.env` 或 API Key 提交到 GitHub；线上平台请使用它的
+Secrets / Environment Variables 配置。
+
 ### 语音模式
 
 进入「预推免综合面试」并开始全模拟后，点击「录音回答」，允许浏览器使用麦克风。
