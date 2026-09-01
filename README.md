@@ -58,6 +58,12 @@ Windows 分享与安装说明见 [SHARING.md](SHARING.md)。运行 `build_share_
 `DEEPSEEK_API_KEY`；模型和语音识别默认已指向硅基流动。部署完成后，Render 会提供一个可分享的
 `https://…onrender.com` 地址，好友无需安装 Python 或运行代码，直接用浏览器打开即可。
 
+当前仓库也可以通过下面的入口一键创建 Render 服务（首次使用需要授权 GitHub）：
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fgh17c%2Fai-interview-coach-online)
+
+创建服务时，将 `DEEPSEEK_API_KEY` 填入 Render 的 Environment Variables；不要把 Key 写进仓库文件。
+
 本机也可以用 Docker 启动：
 
 ```powershell

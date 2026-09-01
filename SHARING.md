@@ -34,6 +34,12 @@ API Key 不应放进 zip 或发给好友。每位使用者都应使用自己的 
 3. 在服务的 Environment 中添加自己的 `DEEPSEEK_API_KEY`，保存并等待部署完成。
 4. 把 Render 生成的 `https://…onrender.com` 地址发给好友即可。
 
+也可以直接打开项目的一键部署入口：
+
+<https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fgh17c%2Fai-interview-coach-online>
+
+首次进入 Render 时授权 GitHub，服务创建后在 Environment 中填写 `DEEPSEEK_API_KEY`，保存并等待构建完成。
+
 也可以在本机使用 Docker：
 
 ```powershell
