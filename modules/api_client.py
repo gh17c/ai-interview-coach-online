@@ -24,6 +24,19 @@ _ENABLE_THINKING = os.getenv("MODEL_ENABLE_THINKING", "false").lower() == "true"
 _API_LOG_PATH = Path(__file__).resolve().parent.parent / "data" / "api_calls.jsonl"
 
 
+def _setting(name: str, default: str = "") -> str:
+    """Read local environment first, then Streamlit Cloud secrets."""
+    value = os.getenv(name, "")
+    if value:
+        return value
+    try:
+        import streamlit as st
+        secret = st.secrets.get(name, "")
+        return str(secret) if secret is not None else default
+    except Exception:
+        return default
+
+
 def _get_client():
     """延迟初始化 OpenAI 客户端——首次调用 API 时才创建，避免导入时崩溃。"""
     global _api_key, _client
@@ -32,7 +45,7 @@ def _get_client():
         return _client
 
     # 1. 本地 .env 文件
-    key = os.getenv("DEEPSEEK_API_KEY", "")
+    key = _setting("DEEPSEEK_API_KEY")
 
     # 2. Streamlit Cloud secrets
     if not key:
@@ -54,11 +67,11 @@ def _get_client():
     _api_key = key
     _client = OpenAI(
         api_key=key,
-        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        base_url=_setting("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
     )
     return _client
 
-DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEFAULT_MODEL = _setting("DEEPSEEK_MODEL", "deepseek-chat")
 
 # DeepSeek 价格 (RMB/1M tokens)，截至2026年6月
 PRICE_INPUT = 1.0 / 1_000_000    # 1元/百万token
